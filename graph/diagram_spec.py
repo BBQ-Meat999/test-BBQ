@@ -16,7 +16,7 @@ from __future__ import annotations
 # バージョン管理
 # ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_VERSION = "1.7.0"
+SYSTEM_VERSION = "2.0.0"
 SYSTEM_NAME    = "UpWork Multi-Agent System"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -30,25 +30,24 @@ NODES: list[dict] = [
         "id":    "project_manager",
         "label": "ProjectManager",
         "layer": "management",
-        "role":  "①モデル選択(利益最大化) ②仕様解析・担当割当 ③Human-in-the-loop (interrupt)",
+        "role":  "①モデル選択(利益最大化・システム側) ②仕様解析・担当割当 ③Human-in-the-loop (interrupt)",
         "tools": [
-            "select_models",
-            "parse_requirements",
-            "create_work_plan",
-            "assign_agents",
-            "incorporate_human_feedback",
+            "ModelSelector(決定論的割当)",
+            "WorkPlan構造化出力",
+            "interrupt()承認",
+            "修正指示の反映(再生成)",
         ],
     },
     {
         "id":    "review_manager",
         "label": "ReviewManager",
         "layer": "management",
-        "role":  "レビュー結果解析・修正指示生成・ループ制御 (最大 max_review_loops 回)",
+        "role":  "レビュー結果解析・修正指示生成・ループ制御 (最大 max_review_loops 回・決定論的)",
         "tools": [
-            "prioritize_issues",
-            "generate_fix_instruction",
-            "should_escalate",
-            "summarize_remaining_issues",
+            "escalate判定(決定論的)",
+            "ReviewDecision構造化出力",
+            "fix_instructions生成",
+            "remaining_issues要約",
         ],
     },
     # Workers
@@ -58,12 +57,9 @@ NODES: list[dict] = [
         "layer": "worker",
         "role":  "Python / FastAPI / pytest → backend_files: dict[str, str]",
         "tools": [
-            "design_api",
-            "write_python_code",
-            "write_tests",
-            "write_requirements",
-            "generate_dockerfile",
-            "apply_fix",
+            "FileSet構造化出力",
+            "API実装+pytest+依存定義",
+            "修正指示の上書きマージ",
         ],
     },
     {
@@ -72,13 +68,9 @@ NODES: list[dict] = [
         "layer": "worker",
         "role":  "React / TypeScript / CSS → frontend_files: dict[str, str]",
         "tools": [
-            "design_ui",
-            "write_html_css",
-            "write_javascript",
-            "generate_components",
-            "integrate_api",
-            "generate_build_config",
-            "apply_fix",
+            "FileSet構造化出力",
+            "HTML/CSS/TSコンポーネント+API連携",
+            "修正指示の上書きマージ",
         ],
     },
     {
@@ -87,14 +79,9 @@ NODES: list[dict] = [
         "layer": "worker",
         "role":  "SQLAlchemy / Alembic / ERD → database_files: dict[str, str]",
         "tools": [
-            "design_erd",
-            "generate_sqlalchemy_models",
-            "generate_alembic_migration",
-            "generate_repository",
-            "optimize_queries",
-            "generate_seed_data",
-            "generate_db_config",
-            "apply_fix",
+            "FileSet構造化出力",
+            "ORMモデル+マイグレーション+Repository",
+            "修正指示の上書きマージ",
         ],
     },
     {
@@ -103,12 +90,9 @@ NODES: list[dict] = [
         "layer": "worker",
         "role":  "共有ユーティリティ実装 → tool_spec_files: dict[str, str]",
         "tools": [
-            "analyze_utility_requirements",
-            "implement_utility",
-            "generate_error_handling",
-            "generate_logging_config",
-            "generate_validation_utils",
-            "apply_fix",
+            "FileSet構造化出力",
+            "バリデーション/例外/ログ等の共通基盤",
+            "修正指示の上書きマージ",
         ],
     },
     # Quality Gate
@@ -116,12 +100,12 @@ NODES: list[dict] = [
         "id":    "test_runner",
         "label": "TestRunnerNode",
         "layer": "quality",
-        "role":  "pytest / ruff / mypy 自動実行 → test_results: dict",
+        "role":  "pytest / ruff / mypy 自動実行 (LLM不使用・純Python) → test_results: dict",
         "tools": [
-            "write_files_to_tempdir",
-            "run_pytest",
-            "run_ruff_check",
-            "run_mypy",
+            "一時ディレクトリ展開",
+            "pytest subprocess実行",
+            "ruff / mypy 静的解析",
+            "結果パース",
         ],
     },
     {
@@ -130,12 +114,10 @@ NODES: list[dict] = [
         "layer": "quality",
         "role":  "品質・整合性・セキュリティ横断レビュー + テスト結果評価",
         "tools": [
-            "review_files",
-            "evaluate_test_results",
-            "check_cross_consistency",
-            "check_security",
-            "identify_fix_targets",
-            "generate_feedback_summary",
+            "ReviewResult構造化出力",
+            "フルコード+テスト結果の横断評価",
+            "OWASP観点セキュリティ確認",
+            "fix_targets特定",
         ],
     },
     # Delivery
@@ -145,11 +127,10 @@ NODES: list[dict] = [
         "layer": "delivery",
         "role":  "UpWork納品物整形・品質チェック・ドキュメント生成",
         "tools": [
-            "merge_all_files",
-            "write_readme",
-            "write_handover_doc",
-            "quality_check",
-            "format_for_upwork",
+            "全成果物マージ(純Python)",
+            "Delivery構造化出力",
+            "README/引き渡しドキュメント生成",
+            "final_files + final_answer",
         ],
     },
 ]
@@ -204,7 +185,7 @@ STATE_FIELDS: list[dict] = [
     {"field": "backend_files",        "type": "dict[str, str]",     "writer": "backend",          "desc": "バックエンド成果物"},
     {"field": "frontend_files",       "type": "dict[str, str]",     "writer": "frontend",         "desc": "フロントエンド成果物"},
     {"field": "database_files",       "type": "dict[str, str]",     "writer": "database",         "desc": "データベース成果物"},
-    # モデル選択 (ProjectManager が select_models で決定)
+    # モデル選択 (ProjectManager が ModelSelector で決定論的に決定)
     {"field": "reward_amount",        "type": "float",              "writer": "input",            "desc": "UpWork 報奨金 (USD) — モデル選択の基準"},
     {"field": "model_assignments",    "type": "dict[str, str]",     "writer": "project_manager",  "desc": "node_name → Claude model_id (利益最大化モデル)"},
     {"field": "estimated_cost",       "type": "float",              "writer": "project_manager",  "desc": "期待 API コスト (USD)"},
@@ -261,9 +242,11 @@ HUMAN_IN_LOOP = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 DIRECTORY_STRUCTURE: list[tuple[str, str]] = [
-    ("agents/Agent_Node.py",                    "基底クラス: @tool自動収集・LLMバインド・ContextManager"),
+    ("agents/Agent_Node.py",                    "基底クラス: 動的モデル選択・構造化出力・ContextManager"),
+    ("agents/schemas.py",                       "★ 構造化出力スキーマ (WorkPlan/FileSet/ReviewResult等)"),
     ("agents/utils/context_manager.py",         "ContextManager: メッセージトリム・アーティファクト要約"),
     ("agents/nodes/project_manager_node.py",    "最上位オーケストレーター + Human-in-the-loop"),
+    ("agents/nodes/worker_base.py",             "WorkerNode基底: FileSet生成・修正マージの共通実装"),
     ("agents/nodes/backend_node.py",            "Python/FastAPI専門 → backend_files: dict[str,str]"),
     ("agents/nodes/frontend_node.py",           "フロントエンド専門 → frontend_files: dict[str,str]"),
     ("agents/nodes/database_node.py",           "DB設計・実装専門 → database_files: dict[str,str]"),
@@ -277,8 +260,8 @@ DIRECTORY_STRUCTURE: list[tuple[str, str]] = [
     ("config/systemMessage.py",                 "全エージェントのシステムプロンプト"),
     ("graph/workflow.py",                       "LangGraph StateGraph + MemorySaver定義"),
     ("graph/diagram_spec.py",                   "★ 図の単一情報源 (ここを更新)"),
-    ("secrets/secrets_manager.py",              "AWS Secrets Manager クライアント (TTLキャッシュ)"),
-    ("secrets/secret_keys.py",                  "シークレット名定数"),
+    ("app_secrets/secrets_manager.py",          "AWS Secrets Manager クライアント (TTLキャッシュ)"),
+    ("app_secrets/secret_keys.py",              "シークレット名定数 (標準ライブラリ secrets との衝突回避でリネーム)"),
     ("tools/generate_diagram.py",               "★ Mermaid図自動生成スクリプト"),
     ("docs/architecture.md",                    "★ 生成されたアーキテクチャ図 (自動更新)"),
     ("pyproject.toml",                          "★ uv依存関係管理 (本番+開発)"),

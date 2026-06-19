@@ -1,3 +1,1 @@
-from .tool_registry import ToolRegistry, register_tool
-
-__all__ = ["ToolRegistry", "register_tool"]
+"""tools パッケージ — 開発支援スクリプト (図生成など)。"""

@@ -64,7 +64,7 @@ class AgentState(TypedDict):
     agent_instructions: dict[str, str]    # エージェント名 → 指示文
     human_feedback:     str               # interrupt() で受け取る承認/修正
 
-    # ── モデル選択 (ProjectManager が select_models で決定) ───────────
+    # ── モデル選択 (ProjectManager が ModelSelector で決定論的に決定) ──
     model_assignments: dict[str, str]  # node_name → Claude model_id
     estimated_cost:    float           # 期待 API コスト (USD)
     estimated_profit:  float           # 期待利益 (USD)

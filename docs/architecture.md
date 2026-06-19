@@ -1,5 +1,5 @@
 # UpWork Multi-Agent System — Architecture
-> **Version:** 1.7.0  |  **Generated:** 2026-06-19 13:34 UTC  |  **Source:** `graph/diagram_spec.py`
+> **Version:** 2.0.0  |  **Generated:** 2026-06-19 14:03 UTC  |  **Source:** `graph/diagram_spec.py`
 
 > [!WARNING]
 > このファイルは自動生成です。直接編集しないでください。
@@ -11,8 +11,8 @@
 ```mermaid
 flowchart TD
     subgraph MANAGEMENT["Management Layer"]
-        project_manager["ProjectManager\n①モデル選択(利益最大化) ②仕様解析・担当割当 ③Human-in-the-loop (interrupt)"]
-        review_manager["ReviewManager\nレビュー結果解析・修正指示生成・ループ制御 (最大 max_review_loops 回)"]
+        project_manager["ProjectManager\n①モデル選択(利益最大化・システム側) ②仕様解析・担当割当 ③Human-in-the-loop (interrupt)"]
+        review_manager["ReviewManager\nレビュー結果解析・修正指示生成・ループ制御 (最大 max_review_loops 回・決定論的)"]
     end
     subgraph WORKER["Worker Layer"]
         backend["BackendNode\nPython / FastAPI / pytest → backend_files: dict[str, str]"]
@@ -21,7 +21,7 @@ flowchart TD
         tool_specialist["ToolSpecialistNode\n共有ユーティリティ実装 → tool_spec_files: dict[str, str]"]
     end
     subgraph QUALITY["Quality Gate"]
-        test_runner["TestRunnerNode\npytest / ruff / mypy 自動実行 → test_results: dict"]
+        test_runner["TestRunnerNode\npytest / ruff / mypy 自動実行 (LLM不使用・純Python) → test_results: dict"]
         code_review["CodeReviewNode\n品質・整合性・セキュリティ横断レビュー + テスト結果評価"]
     end
     subgraph DELIVERY["Delivery"]
@@ -62,7 +62,6 @@ flowchart TD
 |---|---|
 | `-->` | 通常遷移 |
 | `==>` | Send API 並列実行 |
-| `-.->` | オプション (RAG) |
 ---
 ## 2. コードレビューループ シーケンス
 
@@ -113,9 +112,9 @@ mindmap
   root((UpWork Multi-Agent System))
     Management
       ProjectManager
-        ①モデル選択(利益最大化) ②仕様解析・担当割当 ③Human-in-the-loop (interrupt)
+        ①モデル選択(利益最大化・システム側) ②仕様解析・担当割当 ③Human-in-the-loop (interrupt)
       ReviewManager
-        レビュー結果解析・修正指示生成・ループ制御 (最大 max_review_loops 回)
+        レビュー結果解析・修正指示生成・ループ制御 (最大 max_review_loops 回・決定論的)
     Workers
       BackendNode
         Python / FastAPI / pytest → backend_files: dict[str, str]
@@ -127,7 +126,7 @@ mindmap
         共有ユーティリティ実装 → tool_spec_files: dict[str, str]
     Quality Gate
       TestRunnerNode
-        pytest / ruff / mypy 自動実行 → test_results: dict
+        pytest / ruff / mypy 自動実行 (LLM不使用・純Python) → test_results: dict
       CodeReviewNode
         品質・整合性・セキュリティ横断レビュー + テスト結果評価
     Delivery
@@ -212,30 +211,32 @@ flowchart LR
 | `final_files` | `dict[str, str]` | `writer` | 全納品ファイル (merge済み) |
 | `final_answer` | `str` | `writer` | UpWork 提出フォーマット納品物 |
 ---
-## 5. @tool カタログ
+## 5. ノード別 主な処理 / 出力
 
-> 全エージェント合計 **51 ツール**
+> 全ノード合計 **32 処理項目**
 
-| エージェント | @tool 一覧 | 数 |
+| エージェント | 主な処理 / 出力 | 数 |
 |---|---|---|
-| **ProjectManager** | `select_models` / `parse_requirements` / `create_work_plan` / `assign_agents` / `incorporate_human_feedback` | 5 |
-| **ReviewManager** | `prioritize_issues` / `generate_fix_instruction` / `should_escalate` / `summarize_remaining_issues` | 4 |
-| **BackendNode** | `design_api` / `write_python_code` / `write_tests` / `write_requirements` / `generate_dockerfile` / `apply_fix` | 6 |
-| **FrontendNode** | `design_ui` / `write_html_css` / `write_javascript` / `generate_components` / `integrate_api` / `generate_build_config` / `apply_fix` | 7 |
-| **DatabaseNode** | `design_erd` / `generate_sqlalchemy_models` / `generate_alembic_migration` / `generate_repository` / `optimize_queries` / `generate_seed_data` / `generate_db_config` / `apply_fix` | 8 |
-| **ToolSpecialistNode** | `analyze_utility_requirements` / `implement_utility` / `generate_error_handling` / `generate_logging_config` / `generate_validation_utils` / `apply_fix` | 6 |
-| **TestRunnerNode** | `write_files_to_tempdir` / `run_pytest` / `run_ruff_check` / `run_mypy` | 4 |
-| **CodeReviewNode** | `review_files` / `evaluate_test_results` / `check_cross_consistency` / `check_security` / `identify_fix_targets` / `generate_feedback_summary` | 6 |
-| **WriterNode** | `merge_all_files` / `write_readme` / `write_handover_doc` / `quality_check` / `format_for_upwork` | 5 |
+| **ProjectManager** | `ModelSelector(決定論的割当)` / `WorkPlan構造化出力` / `interrupt()承認` / `修正指示の反映(再生成)` | 4 |
+| **ReviewManager** | `escalate判定(決定論的)` / `ReviewDecision構造化出力` / `fix_instructions生成` / `remaining_issues要約` | 4 |
+| **BackendNode** | `FileSet構造化出力` / `API実装+pytest+依存定義` / `修正指示の上書きマージ` | 3 |
+| **FrontendNode** | `FileSet構造化出力` / `HTML/CSS/TSコンポーネント+API連携` / `修正指示の上書きマージ` | 3 |
+| **DatabaseNode** | `FileSet構造化出力` / `ORMモデル+マイグレーション+Repository` / `修正指示の上書きマージ` | 3 |
+| **ToolSpecialistNode** | `FileSet構造化出力` / `バリデーション/例外/ログ等の共通基盤` / `修正指示の上書きマージ` | 3 |
+| **TestRunnerNode** | `一時ディレクトリ展開` / `pytest subprocess実行` / `ruff / mypy 静的解析` / `結果パース` | 4 |
+| **CodeReviewNode** | `ReviewResult構造化出力` / `フルコード+テスト結果の横断評価` / `OWASP観点セキュリティ確認` / `fix_targets特定` | 4 |
+| **WriterNode** | `全成果物マージ(純Python)` / `Delivery構造化出力` / `README/引き渡しドキュメント生成` / `final_files + final_answer` | 4 |
 ---
 ## 6. ディレクトリ構造
 
 ```
 test-BBQ/
 │
-    ├── Agent_Node.py                            # 基底クラス: @tool自動収集・LLMバインド・ContextManager
+    ├── Agent_Node.py                            # 基底クラス: 動的モデル選択・構造化出力・ContextManager
+    ├── schemas.py                               # 構造化出力スキーマ (WorkPlan/FileSet/ReviewResult等) ★
         ├── context_manager.py                       # ContextManager: メッセージトリム・アーティファクト要約
         ├── project_manager_node.py                  # 最上位オーケストレーター + Human-in-the-loop
+        ├── worker_base.py                           # WorkerNode基底: FileSet生成・修正マージの共通実装
         ├── backend_node.py                          # Python/FastAPI専門 → backend_files: dict[str,str]
         ├── frontend_node.py                         # フロントエンド専門 → frontend_files: dict[str,str]
         ├── database_node.py                         # DB設計・実装専門 → database_files: dict[str,str]
@@ -253,7 +254,7 @@ test-BBQ/
     ├── diagram_spec.py                          # 図の単一情報源 (ここを更新) ★
 │
     ├── secrets_manager.py                       # AWS Secrets Manager クライアント (TTLキャッシュ)
-    ├── secret_keys.py                           # シークレット名定数
+    ├── secret_keys.py                           # シークレット名定数 (標準ライブラリ secrets との衝突回避でリネーム)
 │
     ├── generate_diagram.py                      # Mermaid図自動生成スクリプト ★
 │
@@ -283,4 +284,4 @@ git commit -m "docs: アーキテクチャ図更新"
 
 ---
 
-*Auto-generated by `tools/generate_diagram.py` — UpWork Multi-Agent System v1.7.0*
+*Auto-generated by `tools/generate_diagram.py` — UpWork Multi-Agent System v2.0.0*

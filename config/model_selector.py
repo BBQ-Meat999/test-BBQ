@@ -12,19 +12,26 @@ ModelSelector — 報奨金に基づきエージェントごとの最適 Claude 
   発生しやすくなる。手戻り 1 回 = Worker×4 + TestRunner + CodeReview + ReviewManager
   が再実行されるため実質コストは乗数的に増える。
 
-選択戦略 (5 段階):
-  HAIKU_ONLY         : 報奨金 < $30
-  SMART_SMALL        : $30-$150   (管理・品質=Sonnet / Worker=Haiku)
-  SONNET_ALL         : $150-$500
-  SMART_LARGE        : $500-$2000 (管理・品質=Opus / Worker=Sonnet)
-  OPUS_ALL           : $2000+
+選択方式:
+  固定の報奨金しきい値ではなく、5 つの候補戦略すべてについて期待利益を計算し、
+  最大となる戦略を選ぶ (select_assignments)。各戦略の役割→モデル割当は STRATEGIES 参照。
+
+  現行パラメータ (下記 MODELS / _ROLE_WEIGHT) での実際の選択結果:
+    報奨金 ~$0 -  $2  : HAIKU_ONLY  (利益がコストにほぼ等しく、最安が有利)
+    報奨金 ~$3 - $33  : SONNET_ALL  (成功率向上の利得がコスト差を上回る)
+    報奨金  $34 以上   : OPUS_ALL    (高報奨金では最高成功率が最も利益を生む)
+    SMART_SMALL / SMART_LARGE : 現行パラメータでは上記に支配され選ばれない
+      (混在構成より全 Sonnet / 全 Opus の方が期待利益が高いため)。
+      コスト・手戻り率・成功率を調整すれば中間戦略が最適になり得る候補として残してある。
+
+  しきい値は MODELS の rework_rate / delivery_success_rate と _ROLE_WEIGHT に依存して
+  自動的に決まる。パラメータを変えると上記の境界も変わる。
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # モデル定義

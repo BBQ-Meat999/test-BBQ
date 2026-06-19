@@ -23,7 +23,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-from secrets.secret_keys import SecretField, SecretName
+from app_secrets.secret_keys import SecretField, SecretName
 
 logger = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ class SecretsManager:
     # ------------------------------------------------------------------
 
     @classmethod
-    def get_instance(cls) -> "SecretsManager":
+    def get_instance(cls) -> SecretsManager:
         """
         Return (and lazily create) the process-wide singleton.
         Configuration is read from environment variables:

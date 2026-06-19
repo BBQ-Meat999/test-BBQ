@@ -123,14 +123,27 @@ class ProjectManagerNode(AgentNode):
         """
 
         # ── Step 1: モデル選択 (LLM 不要、決定論的) ──────────────────
+        # 報奨金と仕様の複雑さから最適モデルを計算する。
+        # この結果を state に注入してから _invoke() を呼ぶことで、
+        # ProjectManager 自身も選択されたモデルで動作する。
         reward_amount: float = state.get("reward_amount", 0.0)
         selection = ModelSelector.select_assignments(
             reward_amount=reward_amount,
             max_review_loops=settings.workflow.max_review_loops,
         )
 
+        # model_assignments を state に先行注入 — これ以降の全ノードが適切なモデルを使用
+        state_with_models = {
+            **state,
+            "model_assignments": selection["model_assignments"],
+            "estimated_cost":    selection["estimated_cost"],
+            "estimated_profit":  selection["estimated_profit"],
+        }
+
         # ── Step 2: LLM で仕様解析・計画立案 ─────────────────────────
-        response = self._invoke(state)
+        # _invoke() が state_with_models["model_assignments"]["project_manager"] を参照し、
+        # 選択されたモデル (Sonnet or Opus) で実行される
+        response = self._invoke(state_with_models)
 
         # TODO: tool_calls を実行して以下を取得する
         work_plan: str = ""
@@ -139,20 +152,28 @@ class ProjectManagerNode(AgentNode):
 
         # ── Step 3: Human-in-the-loop ─────────────────────────────────
         if settings.workflow.require_plan_approval:
+            # 割当モデル一覧をコンパクトに整形して提示
+            model_summary = "\n".join(
+                f"  {node:<18}: {model_id}"
+                for node, model_id in selection["model_assignments"].items()
+            )
             human_feedback: str = interrupt({
-                "type":            "plan_approval",
-                "work_plan":       work_plan,
-                "assigned_agents": assigned_agents,
-                "instructions":    agent_instructions,
-                "model_strategy":  selection["strategy_name"],
-                "estimated_cost":  selection["estimated_cost"],
+                "type":             "plan_approval",
+                "work_plan":        work_plan,
+                "assigned_agents":  assigned_agents,
+                "instructions":     agent_instructions,
+                "model_strategy":   selection["strategy_name"],
+                "model_assignments": selection["model_assignments"],
+                "estimated_cost":   selection["estimated_cost"],
                 "estimated_profit": selection["estimated_profit"],
                 "message": (
-                    "作業計画を確認してください。\n"
-                    f"使用モデル戦略: {selection['strategy_name']} "
-                    f"({selection['strategy_desc']})\n"
-                    f"推定コスト: ${selection['estimated_cost']:.4f} / "
-                    f"推定利益: ${selection['estimated_profit']:.4f}\n\n"
+                    "═══ 作業計画 承認待ち ═══\n\n"
+                    f"【モデル戦略】{selection['strategy_name']} — {selection['strategy_desc']}\n"
+                    f"【ノード別割当】\n{model_summary}\n\n"
+                    f"【コスト試算】\n"
+                    f"  報奨金       : ${reward_amount:.2f}\n"
+                    f"  推定APIコスト: ${selection['estimated_cost']:.4f}\n"
+                    f"  推定利益     : ${selection['estimated_profit']:.4f}\n\n"
                     "承認する場合は 'approve' を入力してください。\n"
                     "修正が必要な場合は具体的な指示を入力してください。"
                 ),
@@ -163,14 +184,10 @@ class ProjectManagerNode(AgentNode):
                 pass
 
         return {
-            **state,
+            **state_with_models,
             "messages":           state["messages"] + [response],
             "work_plan":          work_plan,
             "assigned_agents":    assigned_agents,
             "agent_instructions": agent_instructions,
             "human_feedback":     "",
-            # ── モデル選択結果 ──────────────────────────────────────────
-            "model_assignments":  selection["model_assignments"],
-            "estimated_cost":     selection["estimated_cost"],
-            "estimated_profit":   selection["estimated_profit"],
         }

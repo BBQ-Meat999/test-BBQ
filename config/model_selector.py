@@ -210,6 +210,20 @@ def _node_cost_by_model_id(node: str, model_id: str) -> float:
     )
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 修正ループコストのモデリング定数
+# ─────────────────────────────────────────────────────────────────────────────
+
+# 1回目の修正後、コードが改善されて2回目に手戻りが発生する確率の減衰係数
+# 0.6 = 1回修正すると手戻り確率が元の60%に下がる (40%の問題が解決される)
+_FIX_IMPROVEMENT_FACTOR: float = 0.6
+
+# 2回目のループは入力トークンが増加する倍率
+# 理由: Worker は「元コード + 1回目の修正指示 + 1回目の修正済みコード」を入力として受け取る
+#       CodeReview も蓄積されたコードを全量レビューするため入力が膨らむ
+_SECOND_LOOP_INPUT_MULTIPLIER: float = 1.3
+
+
 def estimate_cost(
     assignments: dict[str, str],
     max_review_loops: int = 2,
@@ -217,28 +231,54 @@ def estimate_cost(
     """
     ワークフロー全体の期待 API コスト (USD) を計算する。
 
-    手戻りループのコスト:
-      Worker の手戻り率を元に期待ループ回数を推定し、
-      ループ 1 回分のコスト (Worker×4 + TestRunner + CodeReview + ReviewManager) を加算。
+    修正ループのコスト構造 (max_review_loops=2 の場合):
+    ─────────────────────────────────────────────────────
+    初回実行:
+      PM → Workers(×4) → TestRunner → CodeReview → ReviewManager → Writer
+      ↑ 全ノード 1 回ずつ
+
+    1回目修正ループ (確率 p1 = rework_rate):
+      Workers(×4) → TestRunner → CodeReview → ReviewManager
+      → 問題解消なら Writer へ / 問題継続なら 2回目ループへ (loop_count=1)
+
+    2回目修正ループ (確率 p1 × p2, p2 = p1 × FIX_IMPROVEMENT_FACTOR):
+      Workers(×4) → TestRunner → CodeReview → ReviewManager → Writer (強制終了)
+      ※ 入力コンテキストが膨らむため 1ループ目より高コスト
+        (前回コード + 修正指示 が蓄積 → × SECOND_LOOP_INPUT_MULTIPLIER)
+
+    間違いやすいポイント:
+      × expected_loops = rework_rate × max_loops  ← 確率を単純掛けしているだけ
+      ○ E[cost] = p1×cost_L1 + (p1×p2)×cost_L2  ← 条件付き確率で計算
+    ─────────────────────────────────────────────────────
     """
-    # 初回実行コスト (assignments の値は model_id 文字列)
+    # ── 初回実行コスト ────────────────────────────────────────────────
     base_cost = sum(
         _node_cost_by_model_id(node, model_id)
         for node, model_id in assignments.items()
     )
 
-    # 手戻りループの期待コスト
-    worker_model_ids = [assignments.get(n, MODELS["sonnet"].model_id) for n in WORKER_NODES]
-    worst_rework_rate = max(_spec_by_id(mid).rework_rate for mid in worker_model_ids)
-    expected_loops = min(worst_rework_rate, 1.0) * max_review_loops
-
+    # ── 修正ループに関わるノードのコスト基準 ────────────────────────
     rework_nodes = list(WORKER_NODES) + ["test_runner", "code_review", "review_manager"]
-    rework_cost_per_loop = sum(
+    loop1_base_cost = sum(
         _node_cost_by_model_id(node, assignments.get(node, MODELS["sonnet"].model_id))
         for node in rework_nodes
     )
 
-    return base_cost + expected_loops * rework_cost_per_loop
+    # ── 1 回目の修正ループの期待コスト ────────────────────────────────
+    worker_model_ids = [assignments.get(n, MODELS["sonnet"].model_id) for n in WORKER_NODES]
+    p1 = max(_spec_by_id(mid).rework_rate for mid in worker_model_ids)
+
+    rework_cost = p1 * loop1_base_cost
+
+    # ── 2 回目の修正ループの期待コスト (max_review_loops >= 2 の場合のみ) ──
+    if max_review_loops >= 2:
+        # 1回目の修正後に問題が残る確率 (条件付き確率)
+        p2 = p1 * _FIX_IMPROVEMENT_FACTOR
+        # 2回目は前回コード+修正指示が蓄積されるため入力トークンが増える
+        loop2_cost = loop1_base_cost * _SECOND_LOOP_INPUT_MULTIPLIER
+        rework_cost += (p1 * p2) * loop2_cost
+
+    return base_cost + rework_cost
 
 
 # 役割ごとの重み: 納品品質への貢献度

@@ -16,7 +16,7 @@ from __future__ import annotations
 # バージョン管理
 # ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_VERSION = "1.3.0"
+SYSTEM_VERSION = "1.4.0"
 SYSTEM_NAME    = "UpWork Multi-Agent RAG System"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -268,5 +268,9 @@ DIRECTORY_STRUCTURE: list[tuple[str, str]] = [
     ("tools/tool_registry.py",                  "グローバル@toolカタログ"),
     ("tools/generate_diagram.py",               "★ Mermaid図自動生成スクリプト"),
     ("docs/architecture.md",                    "★ 生成されたアーキテクチャ図 (自動更新)"),
+    ("pyproject.toml",                          "★ uv依存関係管理 (本番+開発)"),
+    ("uv.lock",                                 "uv ロックファイル (自動生成・要コミット)"),
+    (".python-version",                         "Pythonバージョン固定 (3.11)"),
+    (".env.example",                            "非機密設定テンプレート"),
     ("main.py",                                 "エントリポイント・DI組み立て"),
 ]

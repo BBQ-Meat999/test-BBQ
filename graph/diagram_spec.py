@@ -16,7 +16,7 @@ from __future__ import annotations
 # バージョン管理
 # ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_VERSION = "1.6.0"
+SYSTEM_VERSION = "1.7.0"
 SYSTEM_NAME    = "UpWork Multi-Agent System"
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -30,8 +30,9 @@ NODES: list[dict] = [
         "id":    "project_manager",
         "label": "ProjectManager",
         "layer": "management",
-        "role":  "仕様解析・作業計画・担当割当・指示生成 / Human-in-the-loop (interrupt)",
+        "role":  "①モデル選択(利益最大化) ②仕様解析・担当割当 ③Human-in-the-loop (interrupt)",
         "tools": [
+            "select_models",
             "parse_requirements",
             "create_work_plan",
             "assign_agents",
@@ -203,6 +204,11 @@ STATE_FIELDS: list[dict] = [
     {"field": "backend_files",        "type": "dict[str, str]",     "writer": "backend",          "desc": "バックエンド成果物"},
     {"field": "frontend_files",       "type": "dict[str, str]",     "writer": "frontend",         "desc": "フロントエンド成果物"},
     {"field": "database_files",       "type": "dict[str, str]",     "writer": "database",         "desc": "データベース成果物"},
+    # モデル選択 (ProjectManager が select_models で決定)
+    {"field": "reward_amount",        "type": "float",              "writer": "input",            "desc": "UpWork 報奨金 (USD) — モデル選択の基準"},
+    {"field": "model_assignments",    "type": "dict[str, str]",     "writer": "project_manager",  "desc": "node_name → Claude model_id (利益最大化モデル)"},
+    {"field": "estimated_cost",       "type": "float",              "writer": "project_manager",  "desc": "期待 API コスト (USD)"},
+    {"field": "estimated_profit",     "type": "float",              "writer": "project_manager",  "desc": "期待利益 (USD)"},
     # TestRunner
     {"field": "test_results",         "type": "dict[str, Any]",     "writer": "test_runner",      "desc": "pytest/ruff/mypy 実行結果"},
     # CodeReview
@@ -267,6 +273,7 @@ DIRECTORY_STRUCTURE: list[tuple[str, str]] = [
     ("agents/nodes/review_manager_node.py",     "レビューループ制御 (max_review_loops)"),
     ("agents/nodes/writer_node.py",             "納品物整形 → final_files + final_answer"),
     ("config/settings.py",                      "設定 (LLM/AWS/Workflow)"),
+    ("config/model_selector.py",               "★ 利益最大化モデル選択 (コスト・手戻り率計算)"),
     ("config/systemMessage.py",                 "全エージェントのシステムプロンプト"),
     ("graph/workflow.py",                       "LangGraph StateGraph + MemorySaver定義"),
     ("graph/diagram_spec.py",                   "★ 図の単一情報源 (ここを更新)"),

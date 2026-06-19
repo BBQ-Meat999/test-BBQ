@@ -20,15 +20,6 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
-class RAGConfig:
-    embedding_model: str   = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"))
-    vector_store_path: str = field(default_factory=lambda: os.getenv("VECTOR_STORE_PATH", "./data/vector_store"))
-    top_k: int             = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
-    chunk_size: int        = field(default_factory=lambda: int(os.getenv("RAG_CHUNK_SIZE", "512")))
-    chunk_overlap: int     = field(default_factory=lambda: int(os.getenv("RAG_CHUNK_OVERLAP", "64")))
-
-
-@dataclass(frozen=True)
 class AWSConfig:
     region: str           = field(default_factory=lambda: os.getenv("AWS_REGION", "ap-northeast-1"))
     profile: str | None   = field(default_factory=lambda: os.getenv("AWS_PROFILE"))
@@ -65,7 +56,6 @@ class Settings:
 
     def __init__(self) -> None:
         self.llm      = LLMConfig()
-        self.rag      = RAGConfig()
         self.aws      = AWSConfig()
         self.workflow = WorkflowConfig()
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")

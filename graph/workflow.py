@@ -10,28 +10,28 @@ flowchart TD
     START(["🚀 START"]) --> PM
 
     subgraph MGMT["Management Layer"]
-        PM["ProjectManager\n仕様解析・担当割当・指示生成\nHuman-in-the-loop: interrupt()"]
-        RM["ReviewManager\nループ制御 MAX=2"]
+        PM["ProjectManager\n①モデル選択 (利益最大化)\n②仕様解析・担当割当\nHuman-in-the-loop: interrupt()"]
+        RM["ReviewManager\nループ制御 MAX=settings.max_review_loops"]
     end
 
     subgraph WORKERS["Worker Layer  ＝＝  Send API 並列"]
-        BE["BackendNode"]
-        FE["FrontendNode"]
-        DB["DatabaseNode"]
-        TS["ToolSpecialistNode"]
+        BE["BackendNode\n割当モデルで実行"]
+        FE["FrontendNode\n割当モデルで実行"]
+        DB["DatabaseNode\n割当モデルで実行"]
+        TS["ToolSpecialistNode\n割当モデルで実行"]
     end
 
     subgraph QUALITY["Quality Gate"]
-        TR["TestRunnerNode\npytest / ruff / mypy"]
+        TR["TestRunnerNode\npytest / ruff / mypy (常にHaiku)"]
         CR["CodeReviewNode\n横断レビュー + テスト結果評価"]
     end
 
-    PM ==>|"interrupt() 承認後"| BE & FE & DB & TS
+    PM ==>|"model_assignments 確定後"| BE & FE & DB & TS
     BE & FE & DB & TS -->|"収束"| TR
     TR --> CR
     CR --> RM
-    RM ==>|"修正 loop<2"| BE & FE & DB & TS
-    RM -->|"完了 or loop≥2"| W["WriterNode"]
+    RM ==>|"修正 loop<max"| BE & FE & DB & TS
+    RM -->|"完了 or loop≥max"| W["WriterNode"]
     W --> END(["✅ END"])
 ```
 """
@@ -55,13 +55,19 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
     # ── 入力 ─────────────────────────────────────────────────────────
-    user_spec: str                      # UpWork クライアントからの仕様テキスト
+    user_spec:     str    # UpWork クライアントからの仕様テキスト
+    reward_amount: float  # UpWork 報奨金 (USD) — モデル選択の基準
 
     # ── ProjectManager ────────────────────────────────────────────────
-    work_plan: str                      # 作業計画書
-    assigned_agents: list[str]          # 担当エージェント名リスト
-    agent_instructions: dict[str, str]  # エージェント名 → 指示文
-    human_feedback: str                 # interrupt() で受け取る人間の承認/修正
+    work_plan:          str               # 作業計画書
+    assigned_agents:    list[str]         # 担当エージェント名リスト
+    agent_instructions: dict[str, str]    # エージェント名 → 指示文
+    human_feedback:     str               # interrupt() で受け取る承認/修正
+
+    # ── モデル選択 (ProjectManager が select_models で決定) ───────────
+    model_assignments: dict[str, str]  # node_name → Claude model_id
+    estimated_cost:    float           # 期待 API コスト (USD)
+    estimated_profit:  float           # 期待利益 (USD)
 
     # ── 実装成果物 (dict[str, str]: ファイルパス → コード) ────────────
     tool_spec_files: dict[str, str]
@@ -70,21 +76,21 @@ class AgentState(TypedDict):
     database_files:  dict[str, str]
 
     # ── テスト実行結果 ────────────────────────────────────────────────
-    test_results: dict[str, Any]        # TestRunnerNode の実行結果
+    test_results: dict[str, Any]       # TestRunnerNode の実行結果
 
     # ── コードレビュー ────────────────────────────────────────────────
-    code_review_feedback: str           # CodeReviewNode の総合フィードバック
-    fix_targets: list[str]              # 修正が必要なエージェント名リスト
+    code_review_feedback: str          # CodeReviewNode の総合フィードバック
+    fix_targets:          list[str]    # 修正が必要なエージェント名リスト
 
     # ── ReviewManager ────────────────────────────────────────────────
-    review_loop_count: int              # レビューループ回数 (上限 max_review_loops)
-    fix_instructions: dict[str, str]    # エージェント名 → 修正指示文
-    remaining_issues: str               # ループ上限到達後の残存課題
-    next: str                           # ルーティングシグナル ("fix" | "writer")
+    review_loop_count: int             # レビューループ回数
+    fix_instructions:  dict[str, str]  # エージェント名 → 修正指示文
+    remaining_issues:  str             # ループ上限到達後の残存課題
+    next:              str             # ルーティングシグナル ("fix" | "writer")
 
     # ── 最終納品物 ────────────────────────────────────────────────────
-    final_files:  dict[str, str]        # 全納品ファイル (merge済み)
-    final_answer: str                   # UpWork 提出フォーマットの納品物
+    final_files:  dict[str, str]  # 全納品ファイル (merge済み)
+    final_answer: str             # UpWork 提出フォーマットの納品物
 
 
 class MultiAgentWorkflow:
@@ -105,15 +111,15 @@ class MultiAgentWorkflow:
         review_manager_node,
         writer_node,
     ) -> None:
-        self.project_manager  = project_manager_node
-        self.backend          = backend_node
-        self.frontend         = frontend_node
-        self.database         = database_node
-        self.tool_specialist  = tool_specialist_node
-        self.test_runner      = test_runner_node
-        self.code_review      = code_review_node
-        self.review_manager   = review_manager_node
-        self.writer           = writer_node
+        self.project_manager = project_manager_node
+        self.backend         = backend_node
+        self.frontend        = frontend_node
+        self.database        = database_node
+        self.tool_specialist = tool_specialist_node
+        self.test_runner     = test_runner_node
+        self.code_review     = code_review_node
+        self.review_manager  = review_manager_node
+        self.writer          = writer_node
 
     # ------------------------------------------------------------------
     # Routing functions
@@ -125,7 +131,7 @@ class MultiAgentWorkflow:
         複数エージェントは Send API で並列実行する。
         """
         agents = state.get("assigned_agents", [])
-        valid = {"backend", "frontend", "database", "tool_specialist"}
+        valid  = {"backend", "frontend", "database", "tool_specialist"}
         targets = [a for a in agents if a in valid]
 
         if not targets:
@@ -142,8 +148,8 @@ class MultiAgentWorkflow:
             return "writer"
 
         fix_targets = state.get("fix_targets", [])
-        valid = {"backend", "frontend", "database", "tool_specialist"}
-        targets = [t for t in fix_targets if t in valid]
+        valid       = {"backend", "frontend", "database", "tool_specialist"}
+        targets     = [t for t in fix_targets if t in valid]
 
         if not targets:
             return "writer"
@@ -194,8 +200,8 @@ class MultiAgentWorkflow:
             graph.add_edge(node, "test_runner")
 
         # ── TestRunner → CodeReview → ReviewManager ──────────────────
-        graph.add_edge("test_runner",  "code_review")
-        graph.add_edge("code_review",  "review_manager")
+        graph.add_edge("test_runner", "code_review")
+        graph.add_edge("code_review", "review_manager")
 
         # ── ReviewManager → 修正ループ or Writer ─────────────────────
         graph.add_conditional_edges(

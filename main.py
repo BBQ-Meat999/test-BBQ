@@ -1,7 +1,13 @@
 """
 Entry point for the UpWork multi-agent RAG system.
-ユーザーから案件仕様 (自然言語) を受け取り、
-バックエンド / フロントエンド / 両方のエージェントへ振り分けて納品物を生成する。
+
+フロー:
+  ユーザー仕様 (自然言語)
+    → ProjectManager (仕様解析・担当割当・指示生成)
+    → [Backend | Frontend | Database | ToolSpecialist] (並列実装)
+    → CodeReview (横断レビュー)
+    → ReviewManager (修正ループ制御 / 最大 MAX_REVIEW_LOOPS 回)
+    → Writer (UpWork納品物整形)
 """
 
 from __future__ import annotations
@@ -11,14 +17,17 @@ from langchain_core.messages import HumanMessage
 
 from agents.nodes.analysis_node import AnalysisNode
 from agents.nodes.backend_node import BackendNode
+from agents.nodes.code_review_node import CodeReviewNode
+from agents.nodes.database_node import DatabaseNode
 from agents.nodes.frontend_node import FrontendNode
+from agents.nodes.project_manager_node import ProjectManagerNode
+from agents.nodes.review_manager_node import MAX_REVIEW_LOOPS, ReviewManagerNode
 from agents.nodes.search_node import SearchNode
-from agents.nodes.supervisor_node import SupervisorNode
+from agents.nodes.tool_specialist_node import ToolSpecialistNode
 from agents.nodes.writer_node import WriterNode
 from config.settings import settings
 from graph.workflow import AgentState, MultiAgentWorkflow
 from rag.retriever import Retriever
-from rag.vector_store import VectorStore
 
 
 def build_app():
@@ -38,20 +47,28 @@ def build_app():
     retriever: Retriever = ...  # TODO: バックエンドを差し込む
 
     # ── エージェントノード ────────────────────────────────────────────
-    supervisor = SupervisorNode(llm=llm)
-    search     = SearchNode(llm=llm, retriever=retriever)
-    analysis   = AnalysisNode(llm=llm)
-    backend    = BackendNode(llm=llm)
-    frontend   = FrontendNode(llm=llm)
-    writer     = WriterNode(llm=llm)
+    project_manager = ProjectManagerNode(llm=llm)
+    backend         = BackendNode(llm=llm)
+    frontend        = FrontendNode(llm=llm)
+    database        = DatabaseNode(llm=llm)
+    tool_specialist = ToolSpecialistNode(llm=llm)
+    search          = SearchNode(llm=llm, retriever=retriever)
+    analysis        = AnalysisNode(llm=llm)
+    code_review     = CodeReviewNode(llm=llm)
+    review_manager  = ReviewManagerNode(llm=llm)
+    writer          = WriterNode(llm=llm)
 
     # ── グラフ ────────────────────────────────────────────────────────
     workflow = MultiAgentWorkflow(
-        supervisor_node=supervisor,
-        search_node=search,
-        analysis_node=analysis,
+        project_manager_node=project_manager,
         backend_node=backend,
         frontend_node=frontend,
+        database_node=database,
+        tool_specialist_node=tool_specialist,
+        search_node=search,
+        analysis_node=analysis,
+        code_review_node=code_review,
+        review_manager_node=review_manager,
         writer_node=writer,
     )
     return workflow.compile()
@@ -72,15 +89,24 @@ def run(spec: str) -> str:
     app = build_app()
 
     initial_state: AgentState = {
-        "messages":        [HumanMessage(content=spec)],
-        "user_spec":       spec,
-        "task_type":       "",
-        "next":            "",
-        "retrieved_docs":  [],
-        "analysis_result": "",
-        "backend_result":  "",
-        "frontend_result": "",
-        "final_answer":    "",
+        "messages":            [HumanMessage(content=spec)],
+        "user_spec":           spec,
+        "work_plan":           "",
+        "assigned_agents":     [],
+        "agent_instructions":  {},
+        "tool_spec_result":    "",
+        "backend_result":      "",
+        "frontend_result":     "",
+        "database_result":     "",
+        "retrieved_docs":      [],
+        "analysis_result":     "",
+        "code_review_feedback": "",
+        "fix_targets":         [],
+        "review_loop_count":   0,
+        "fix_instructions":    {},
+        "remaining_issues":    "",
+        "next":                "",
+        "final_answer":        "",
     }
 
     final_state = app.invoke(initial_state)
@@ -91,11 +117,14 @@ if __name__ == "__main__":
     import sys
 
     spec = " ".join(sys.argv[1:]) if len(sys.argv) > 1 else (
-        "FastAPIを使ったTODO管理APIとReactのフロントエンドを作成してください。"
-        "ユーザー認証 (JWT)・CRUD操作・PostgreSQL対応が必要です。"
+        "FastAPIとPostgreSQLを使ったTODO管理APIと"
+        "ReactフロントエンドをTypeScriptで実装してください。"
+        "JWT認証・CRUD操作・ページネーション対応が必要です。"
+        "Docker Composeで一発起動できるようにしてください。"
     )
 
     print("=== UpWork Multi-Agent System ===")
+    print(f"レビューループ上限: {MAX_REVIEW_LOOPS} 回")
     print(f"仕様: {spec}\n")
     result = run(spec)
     print(result)

@@ -16,13 +16,13 @@ from __future__ import annotations
 # バージョン管理
 # ─────────────────────────────────────────────────────────────────────────────
 
-SYSTEM_VERSION = "1.5.0"
-SYSTEM_NAME    = "UpWork Multi-Agent RAG System"
+SYSTEM_VERSION = "1.6.0"
+SYSTEM_NAME    = "UpWork Multi-Agent System"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # ノード定義
 # ─────────────────────────────────────────────────────────────────────────────
-# layer: "management" | "worker" | "quality" | "rag" | "delivery"
+# layer: "management" | "worker" | "quality" | "delivery"
 
 NODES: list[dict] = [
     # Management
@@ -137,28 +137,6 @@ NODES: list[dict] = [
             "generate_feedback_summary",
         ],
     },
-    # RAG
-    {
-        "id":    "search",
-        "label": "SearchNode",
-        "layer": "rag",
-        "role":  "ベクトル検索 / キーワード検索",
-        "tools": [
-            "semantic_search",
-            "keyword_search",
-        ],
-    },
-    {
-        "id":    "analysis",
-        "label": "AnalysisNode",
-        "layer": "rag",
-        "role":  "技術スタック分析 / 要件抽出",
-        "tools": [
-            "summarize",
-            "extract_facts",
-            "compare",
-        ],
-    },
     # Delivery
     {
         "id":    "writer",
@@ -178,7 +156,7 @@ NODES: list[dict] = [
 # ─────────────────────────────────────────────────────────────────────────────
 # エッジ定義
 # ─────────────────────────────────────────────────────────────────────────────
-# kind: "normal" | "conditional" | "send_parallel" | "optional"
+# kind: "normal" | "conditional" | "send_parallel"
 
 EDGES: list[dict] = [
     # Entry
@@ -193,9 +171,8 @@ EDGES: list[dict] = [
     {"from": "frontend",        "to": "test_runner",      "label": "実装完了",                      "kind": "normal"},
     {"from": "database",        "to": "test_runner",      "label": "実装完了",                      "kind": "normal"},
     {"from": "tool_specialist", "to": "test_runner",      "label": "実装完了",                      "kind": "normal"},
-    # TestRunner → CodeReview
+    # TestRunner → CodeReview → ReviewManager
     {"from": "test_runner",     "to": "code_review",      "label": "テスト結果",                    "kind": "normal"},
-    # CodeReview → ReviewManager
     {"from": "code_review",     "to": "review_manager",   "label": "フィードバック",                "kind": "normal"},
     # ReviewManager → Workers (修正ループ / Send API)
     {"from": "review_manager",  "to": "backend",          "label": "修正指示 (loop<max)",           "kind": "send_parallel"},
@@ -204,10 +181,6 @@ EDGES: list[dict] = [
     {"from": "review_manager",  "to": "tool_specialist",  "label": "修正指示 (loop<max)",           "kind": "send_parallel"},
     # ReviewManager → Writer (終了条件)
     {"from": "review_manager",  "to": "writer",           "label": "問題なし or loop≥max",          "kind": "conditional"},
-    # RAG (オプション)
-    {"from": "project_manager", "to": "search",           "label": "RAG検索 (任意)",                "kind": "optional"},
-    {"from": "search",          "to": "analysis",         "label": "",                              "kind": "optional"},
-    {"from": "analysis",        "to": "project_manager",  "label": "分析結果",                      "kind": "optional"},
     # Delivery → END
     {"from": "writer",          "to": "END",              "label": "",                              "kind": "normal"},
 ]
@@ -230,9 +203,6 @@ STATE_FIELDS: list[dict] = [
     {"field": "backend_files",        "type": "dict[str, str]",     "writer": "backend",          "desc": "バックエンド成果物"},
     {"field": "frontend_files",       "type": "dict[str, str]",     "writer": "frontend",         "desc": "フロントエンド成果物"},
     {"field": "database_files",       "type": "dict[str, str]",     "writer": "database",         "desc": "データベース成果物"},
-    # RAG
-    {"field": "retrieved_docs",       "type": "list[dict]",         "writer": "search",           "desc": "ベクトル検索結果"},
-    {"field": "analysis_result",      "type": "str",                "writer": "analysis",         "desc": "技術分析結果"},
     # TestRunner
     {"field": "test_results",         "type": "dict[str, Any]",     "writer": "test_runner",      "desc": "pytest/ruff/mypy 実行結果"},
     # CodeReview
@@ -267,11 +237,11 @@ REVIEW_LOOP = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 HUMAN_IN_LOOP = {
-    "node":       "project_manager",
-    "trigger":    "settings.workflow.require_plan_approval == True",
-    "mechanism":  "langgraph.types.interrupt()",
+    "node":         "project_manager",
+    "trigger":      "settings.workflow.require_plan_approval == True",
+    "mechanism":    "langgraph.types.interrupt()",
     "checkpointer": "MemorySaver (main.py で DI)",
-    "resume_key": "human_feedback",
+    "resume_key":   "human_feedback",
     "flow": [
         "1. ProjectManager が作業計画を生成する",
         "2. interrupt() でグラフを一時停止し計画を人間に提示",
@@ -295,19 +265,13 @@ DIRECTORY_STRUCTURE: list[tuple[str, str]] = [
     ("agents/nodes/test_runner_node.py",        "pytest/ruff/mypy 自動実行 → test_results: dict"),
     ("agents/nodes/code_review_node.py",        "横断コードレビュー + テスト結果評価"),
     ("agents/nodes/review_manager_node.py",     "レビューループ制御 (max_review_loops)"),
-    ("agents/nodes/search_node.py",             "RAGベクトル検索"),
-    ("agents/nodes/analysis_node.py",           "技術分析"),
     ("agents/nodes/writer_node.py",             "納品物整形 → final_files + final_answer"),
-    ("config/settings.py",                      "設定 (LLM/RAG/AWS/Workflow)"),
-    ("config/systemMessage.py",                 "全エージェントのシステムプロンプト (循環インポートなし)"),
+    ("config/settings.py",                      "設定 (LLM/AWS/Workflow)"),
+    ("config/systemMessage.py",                 "全エージェントのシステムプロンプト"),
     ("graph/workflow.py",                       "LangGraph StateGraph + MemorySaver定義"),
     ("graph/diagram_spec.py",                   "★ 図の単一情報源 (ここを更新)"),
-    ("rag/retriever.py",                        "Retriever (semantic/keyword/hybrid)"),
-    ("rag/vector_store.py",                     "VectorStore (Protocol抽象化)"),
-    ("rag/embeddings.py",                       "EmbeddingModel"),
     ("secrets/secrets_manager.py",              "AWS Secrets Manager クライアント (TTLキャッシュ)"),
     ("secrets/secret_keys.py",                  "シークレット名定数"),
-    ("tools/tool_registry.py",                  "グローバル@toolカタログ"),
     ("tools/generate_diagram.py",               "★ Mermaid図自動生成スクリプト"),
     ("docs/architecture.md",                    "★ 生成されたアーキテクチャ図 (自動更新)"),
     ("pyproject.toml",                          "★ uv依存関係管理 (本番+開発)"),

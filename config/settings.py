@@ -14,47 +14,65 @@ from functools import cached_property
 
 @dataclass(frozen=True)
 class LLMConfig:
-    model: str       = field(default_factory=lambda: os.getenv("LLM_MODEL", "claude-sonnet-4-6"))
+    model: str        = field(default_factory=lambda: os.getenv("LLM_MODEL", "claude-sonnet-4-6"))
     temperature: float = field(default_factory=lambda: float(os.getenv("LLM_TEMPERATURE", "0.0")))
-    max_tokens: int  = field(default_factory=lambda: int(os.getenv("LLM_MAX_TOKENS", "4096")))
+    max_tokens: int   = field(default_factory=lambda: int(os.getenv("LLM_MAX_TOKENS", "4096")))
 
 
 @dataclass(frozen=True)
 class RAGConfig:
-    embedding_model: str  = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"))
+    embedding_model: str   = field(default_factory=lambda: os.getenv("EMBEDDING_MODEL", "text-embedding-3-small"))
     vector_store_path: str = field(default_factory=lambda: os.getenv("VECTOR_STORE_PATH", "./data/vector_store"))
-    top_k: int        = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
-    chunk_size: int   = field(default_factory=lambda: int(os.getenv("RAG_CHUNK_SIZE", "512")))
-    chunk_overlap: int = field(default_factory=lambda: int(os.getenv("RAG_CHUNK_OVERLAP", "64")))
+    top_k: int             = field(default_factory=lambda: int(os.getenv("RAG_TOP_K", "5")))
+    chunk_size: int        = field(default_factory=lambda: int(os.getenv("RAG_CHUNK_SIZE", "512")))
+    chunk_overlap: int     = field(default_factory=lambda: int(os.getenv("RAG_CHUNK_OVERLAP", "64")))
 
 
 @dataclass(frozen=True)
 class AWSConfig:
-    region: str          = field(default_factory=lambda: os.getenv("AWS_REGION", "ap-northeast-1"))
-    profile: str | None  = field(default_factory=lambda: os.getenv("AWS_PROFILE"))
+    region: str           = field(default_factory=lambda: os.getenv("AWS_REGION", "ap-northeast-1"))
+    profile: str | None   = field(default_factory=lambda: os.getenv("AWS_PROFILE"))
     secret_cache_ttl: int = field(default_factory=lambda: int(os.getenv("SECRET_CACHE_TTL", "300")))
+
+
+@dataclass(frozen=True)
+class WorkflowConfig:
+    """
+    ワークフロー制御パラメータ。
+    review_manager_node.py などエージェント側はここからインポートすること。
+    (循環インポートを防ぐため config 層のみに定義)
+    """
+    # レビューループ上限 (実装 ↔ レビュー の最大往復回数)
+    max_review_loops: int = field(
+        default_factory=lambda: int(os.getenv("MAX_REVIEW_LOOPS", "2"))
+    )
+    # コンテキスト圧縮: messages の保持上限数
+    max_context_messages: int = field(
+        default_factory=lambda: int(os.getenv("MAX_CONTEXT_MESSAGES", "20"))
+    )
+    # Human-in-the-loop: 作業計画の承認を求めるか
+    require_plan_approval: bool = field(
+        default_factory=lambda: os.getenv("REQUIRE_PLAN_APPROVAL", "true").lower() == "true"
+    )
 
 
 class Settings:
     """
     Application-wide settings.
 
-    Secrets (api_key etc.) are fetched lazily from AWS Secrets Manager
-    on first access and cached for `aws.secret_cache_ttl` seconds.
+    Secrets (api_key 等) は初回アクセス時に AWS Secrets Manager から遅延取得。
     """
 
     def __init__(self) -> None:
-        self.llm = LLMConfig()
-        self.rag = RAGConfig()
-        self.aws = AWSConfig()
+        self.llm      = LLMConfig()
+        self.rag      = RAGConfig()
+        self.aws      = AWSConfig()
+        self.workflow = WorkflowConfig()
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
     @cached_property
     def anthropic_api_key(self) -> str:
-        """
-        Retrieve the Anthropic API key from AWS Secrets Manager.
-        Raises SecretsManagerError if unavailable.
-        """
+        """Retrieve the Anthropic API key from AWS Secrets Manager."""
         from secrets.secrets_manager import SecretsManager
         return SecretsManager.get_instance().get_anthropic_api_key()
 

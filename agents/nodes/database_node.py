@@ -1,8 +1,7 @@
 """
 DatabaseNode — データベース設計・実装専門エージェント。
 
-ERD設計・SQLAlchemyモデル・マイグレーション・クエリ最適化・
-シードデータ生成を担当する。
+成果物は dict[str, str] (ファイルパス → コード) で返す。
 """
 
 from __future__ import annotations
@@ -17,14 +16,7 @@ from agents.Agent_Node import AgentNode
 class DatabaseNode(AgentNode):
     """
     データベース専門エージェント。
-
-    責務:
-      - ER図・スキーマ設計
-      - SQLAlchemy ORM モデル生成
-      - Alembic マイグレーションスクリプト生成
-      - インデックス設計・クエリ最適化
-      - シードデータ・テストフィクスチャ生成
-      - 接続設定・コネクションプール設定
+    成果物は state["database_files"] (dict[str, str]) に格納する。
     """
 
     node_name = "database"
@@ -34,51 +26,68 @@ class DatabaseNode(AgentNode):
     # ------------------------------------------------------------------
 
     @tool
-    def design_erd(self, entities: list[str], spec: str) -> str:
+    def design_erd(self, entities: list[str], spec: str) -> dict[str, Any]:
         """
-        仕様からエンティティ関係図 (ERD) を設計する。
-        エンティティ・属性・カーディナリティ・主キー・外部キーを含む。
+        ER 図を設計する。
+        Returns:
+            entities   : list[{"name": str, "attributes": list, "pk": str}]
+            relations  : list[{"from": str, "to": str, "cardinality": str}]
+            indexes    : list[str]
         """
         ...
 
     @tool
-    def generate_sqlalchemy_models(self, erd: str, db_type: str = "postgresql") -> str:
+    def generate_sqlalchemy_models(self, erd: dict, db_type: str = "postgresql") -> dict[str, str]:
         """
         ERD から SQLAlchemy ORM モデルを生成する。
-        型アノテーション・リレーション・制約・インデックスを含む。
+        Returns: {"src/db/models.py": "...", "src/db/base.py": "..."}
         """
         ...
 
     @tool
-    def generate_alembic_migration(self, models: str, revision_message: str) -> str:
+    def generate_alembic_migration(self, models_file: str, revision_message: str) -> dict[str, str]:
         """
-        SQLAlchemy モデルから Alembic マイグレーションスクリプトを生成する。
-        upgrade / downgrade 両方を実装する。
-        """
-        ...
-
-    @tool
-    def optimize_queries(self, query_patterns: list[str], models: str) -> str:
-        """
-        想定クエリパターンに対するインデックス設計と最適化クエリを生成する。
-        実行計画の考察も含む。
+        Alembic マイグレーションスクリプトを生成する。
+        Returns:
+            {"alembic/env.py": "...", "alembic/versions/xxxx_init.py": "..."}
         """
         ...
 
     @tool
-    def generate_seed_data(self, models: str, count: int = 10) -> str:
+    def generate_repository(self, models: dict[str, str]) -> dict[str, str]:
         """
-        テスト・開発用のシードデータ投入スクリプトを生成する。
-        Faker ライブラリを用いたリアルなダミーデータを生成する。
+        各モデルに対応する Repository クラス (CRUD) を生成する。
+        Returns: {"src/db/repositories/user_repo.py": "...", ...}
         """
         ...
 
     @tool
-    def generate_db_config(self, db_type: str, use_async: bool = True) -> str:
+    def optimize_queries(self, query_patterns: list[str], erd: dict) -> dict[str, str]:
         """
-        データベース接続設定・コネクションプール設定を生成する。
-        非同期対応 (asyncpg / aiosqlite) と環境変数ベースの設定を含む。
+        想定クエリパターンに対するインデックス追加マイグレーションを生成する。
+        Returns: {"alembic/versions/xxxx_add_indexes.py": "..."}
         """
+        ...
+
+    @tool
+    def generate_seed_data(self, models_file: str, count: int = 10) -> dict[str, str]:
+        """
+        シードデータ投入スクリプトを生成する。
+        Returns: {"scripts/seed.py": "..."}
+        """
+        ...
+
+    @tool
+    def generate_db_config(self, db_type: str, use_async: bool = True) -> dict[str, str]:
+        """
+        DB 接続設定を生成する。
+        Returns: {"src/db/session.py": "...", "src/db/config.py": "..."}
+        """
+        ...
+
+    @tool
+    def apply_fix(self, current_files: dict[str, str], fix_instruction: str) -> dict[str, str]:
+        """修正指示を受けて既存ファイルを修正する。"""
         ...
 
     # ------------------------------------------------------------------
@@ -86,18 +95,21 @@ class DatabaseNode(AgentNode):
     # ------------------------------------------------------------------
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
-        """
-        DB設計・実装を行い database_result に格納する。
-        ProjectManager または ReviewManager から呼ばれる。
-        """
-        messages = self._build_messages(state)
-        response = self._bound_llm.invoke(messages)
+        response = self._invoke(state)
 
-        # TODO: tool_calls を実行してDB成果物を組み立てる
-        database_result: str = ""
+        fix_inst = state.get("fix_instructions", {}).get(self.node_name)
+        existing = state.get("database_files", {})
+
+        if fix_inst and existing:
+            # TODO: apply_fix tool_call を実行
+            database_files = existing  # stub
+        else:
+            # TODO: design_erd → generate_sqlalchemy_models → generate_alembic_migration
+            #        → generate_repository → generate_db_config → generate_seed_data
+            database_files: dict[str, str] = {}
 
         return {
             **state,
             "messages":       state["messages"] + [response],
-            "database_result": database_result,
+            "database_files": database_files,
         }

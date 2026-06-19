@@ -1,38 +1,42 @@
 """
 MultiAgentWorkflow — UpWork案件処理の完全版 LangGraph StateGraph。
 
-グラフトポロジー
-----------------
+アーキテクチャ全体図は docs/architecture.md を参照。
+グラフ定義の単一情報源は graph/diagram_spec.py。
+図の更新: python tools/generate_diagram.py
 
-  START
-    │
-    ▼
-  ProjectManager  ─── 仕様解析・作業計画・担当割当
-    │ (Send API / 並列)
-    ├──────────────┬──────────────┬──────────────┐
-    ▼              ▼              ▼              ▼
-  Backend      Frontend      Database     ToolSpecialist
-    └──────────────┴──────────────┴──────────────┘
-                         │ (全員 CodeReview へ収束)
-                         ▼
-                     CodeReview  ─── 横断レビュー (品質・整合性・セキュリティ)
-                         │
-                         ▼
-                    ReviewManager  ─── ループ制御 (最大 MAX_REVIEW_LOOPS 回)
-                         │
-               ┌─────────┴──────────────────────────────────┐
-               │ (問題あり & loop < MAX)                      │ (問題なし or loop >= MAX)
-               │ (Send API / 並列 fix)                        ▼
-               ├──────────────┬──────────────┐            Writer
-               ▼              ▼              ▼              │
-           Backend fix    Frontend fix  Database fix        ▼
-               └──────────────┴──────────────┘            END
-                              │
-                              ▼
-                          CodeReview  (再レビュー)
-                              ▼
-                         ReviewManager
-                              ...
+ノード構成 (Mermaid — GitHub/VSCode の Markdown プレビューで確認可能)
+---------------------------------------------------------------------
+
+```mermaid
+flowchart TD
+    START(["🚀 START"]) --> PM
+
+    subgraph MGMT["Management Layer"]
+        PM["ProjectManager\n仕様解析・担当割当・指示生成"]
+        RM["ReviewManager\nループ制御 MAX=2"]
+    end
+
+    subgraph WORKERS["Worker Layer  ＝＝  Send API 並列"]
+        BE["BackendNode"]
+        FE["FrontendNode"]
+        DB["DatabaseNode"]
+        TS["ToolSpecialistNode"]
+    end
+
+    subgraph QUALITY["Quality Gate"]
+        CR["CodeReviewNode\n横断レビュー"]
+    end
+
+    PM ==>|"並列"| BE & FE & DB & TS
+    BE & FE & DB & TS -->|"収束"| CR
+    CR --> RM
+    RM ==>|"修正 loop<2"| BE & FE & DB & TS
+    RM -->|"完了 or loop≥2"| W["WriterNode"]
+    W --> END(["✅ END"])
+
+    PM -.->|"RAG(任意)"| SE["SearchNode"] -.-> AN["AnalysisNode"] -.-> PM
+```
 """
 
 from __future__ import annotations

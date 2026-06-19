@@ -5,9 +5,6 @@ MultiAgentWorkflow — UpWork案件処理の完全版 LangGraph StateGraph。
 グラフ定義の単一情報源は graph/diagram_spec.py。
 図の更新: python tools/generate_diagram.py
 
-ノード構成 (Mermaid — GitHub/VSCode の Markdown プレビューで確認可能)
----------------------------------------------------------------------
-
 ```mermaid
 flowchart TD
     START(["🚀 START"]) --> PM
@@ -36,8 +33,6 @@ flowchart TD
     RM ==>|"修正 loop<2"| BE & FE & DB & TS
     RM -->|"完了 or loop≥2"| W["WriterNode"]
     W --> END(["✅ END"])
-
-    PM -.->|"RAG(任意)"| SE["SearchNode"] -.-> AN["AnalysisNode"] -.-> PM
 ```
 """
 
@@ -74,10 +69,6 @@ class AgentState(TypedDict):
     frontend_files:  dict[str, str]
     database_files:  dict[str, str]
 
-    # ── RAG ──────────────────────────────────────────────────────────
-    retrieved_docs: list[dict[str, Any]]
-    analysis_result: str
-
     # ── テスト実行結果 ────────────────────────────────────────────────
     test_results: dict[str, Any]        # TestRunnerNode の実行結果
 
@@ -110,8 +101,6 @@ class MultiAgentWorkflow:
         database_node,
         tool_specialist_node,
         test_runner_node,
-        search_node,
-        analysis_node,
         code_review_node,
         review_manager_node,
         writer_node,
@@ -122,8 +111,6 @@ class MultiAgentWorkflow:
         self.database         = database_node
         self.tool_specialist  = tool_specialist_node
         self.test_runner      = test_runner_node
-        self.search           = search_node
-        self.analysis         = analysis_node
         self.code_review      = code_review_node
         self.review_manager   = review_manager_node
         self.writer           = writer_node
@@ -138,23 +125,18 @@ class MultiAgentWorkflow:
         複数エージェントは Send API で並列実行する。
         """
         agents = state.get("assigned_agents", [])
-
         valid = {"backend", "frontend", "database", "tool_specialist"}
         targets = [a for a in agents if a in valid]
 
         if not targets:
             return "writer"
-
         if len(targets) == 1:
             return targets[0]
-
         return [Send(agent, state) for agent in targets]
 
     def _dispatch_fixes_from_review_manager(self, state: AgentState) -> str | list:
         """
         ReviewManager の判断に基づき修正ディスパッチまたは Writer へルーティング。
-        - next == "writer" → Writer へ
-        - next == "fix"    → fix_targets を Send で並列修正実行
         """
         if state.get("next") == "writer":
             return "writer"
@@ -165,10 +147,8 @@ class MultiAgentWorkflow:
 
         if not targets:
             return "writer"
-
         if len(targets) == 1:
             return targets[0]
-
         return [Send(agent, state) for agent in targets]
 
     # ------------------------------------------------------------------
@@ -178,9 +158,7 @@ class MultiAgentWorkflow:
     def compile(self, checkpointer: MemorySaver | None = None):
         """
         StateGraph をビルドしてコンパイル済みグラフを返す。
-
-        checkpointer に MemorySaver を渡すことで interrupt() (Human-in-the-loop)
-        が有効になる。省略時はステートレス動作 (interrupt() は使えない)。
+        checkpointer に MemorySaver を渡すと interrupt() が有効になる。
         """
         graph = StateGraph(AgentState)
 
@@ -191,8 +169,6 @@ class MultiAgentWorkflow:
         graph.add_node("database",        self.database.run)
         graph.add_node("tool_specialist", self.tool_specialist.run)
         graph.add_node("test_runner",     self.test_runner.run)
-        graph.add_node("search",          self.search.run)
-        graph.add_node("analysis",        self.analysis.run)
         graph.add_node("code_review",     self.code_review.run)
         graph.add_node("review_manager",  self.review_manager.run)
         graph.add_node("writer",          self.writer.run)
@@ -217,11 +193,9 @@ class MultiAgentWorkflow:
         for node in ("backend", "frontend", "database", "tool_specialist"):
             graph.add_edge(node, "test_runner")
 
-        # ── TestRunner → CodeReview ──────────────────────────────────
-        graph.add_edge("test_runner", "code_review")
-
-        # ── CodeReview → ReviewManager ───────────────────────────────
-        graph.add_edge("code_review", "review_manager")
+        # ── TestRunner → CodeReview → ReviewManager ──────────────────
+        graph.add_edge("test_runner",  "code_review")
+        graph.add_edge("code_review",  "review_manager")
 
         # ── ReviewManager → 修正ループ or Writer ─────────────────────
         graph.add_conditional_edges(

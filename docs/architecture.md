@@ -1,5 +1,5 @@
-# UpWork Multi-Agent RAG System — Architecture
-> **Version:** 1.5.0  |  **Generated:** 2026-06-19 13:13 UTC  |  **Source:** `graph/diagram_spec.py`
+# UpWork Multi-Agent System — Architecture
+> **Version:** 1.6.0  |  **Generated:** 2026-06-19 13:20 UTC  |  **Source:** `graph/diagram_spec.py`
 
 > [!WARNING]
 > このファイルは自動生成です。直接編集しないでください。
@@ -24,10 +24,6 @@ flowchart TD
         test_runner["TestRunnerNode\npytest / ruff / mypy 自動実行 → test_results: dict"]
         code_review["CodeReviewNode\n品質・整合性・セキュリティ横断レビュー + テスト結果評価"]
     end
-    subgraph RAG["RAG Layer"]
-        search["SearchNode\nベクトル検索 / キーワード検索"]
-        analysis["AnalysisNode\n技術スタック分析 / 要件抽出"]
-    end
     subgraph DELIVERY["Delivery"]
         writer["WriterNode\nUpWork納品物整形・品質チェック・ドキュメント生成"]
     end
@@ -49,9 +45,6 @@ flowchart TD
     review_manager ==>|"修正指示 (loop<max)"| database
     review_manager ==>|"修正指示 (loop<max)"| tool_specialist
     review_manager -->|"問題なし or loop≥max"| writer
-    project_manager -.->|"RAG検索 (任意)"| search
-    search -.-> analysis
-    analysis -.->|"分析結果"| project_manager
     writer --> END
     style project_manager fill:#ffecd2,stroke:#e67e22
     style review_manager fill:#ffecd2,stroke:#e67e22
@@ -61,8 +54,6 @@ flowchart TD
     style tool_specialist fill:#d5f5e3,stroke:#27ae60
     style test_runner fill:#fde8e8,stroke:#e74c3c
     style code_review fill:#fde8e8,stroke:#e74c3c
-    style search fill:#d6eaf8,stroke:#2980b9
-    style analysis fill:#d6eaf8,stroke:#2980b9
     style writer fill:#f8f9fa,stroke:#7f8c8d
 ```
 
@@ -119,7 +110,7 @@ sequenceDiagram
 
 ```mermaid
 mindmap
-  root((UpWork Multi-Agent RAG System))
+  root((UpWork Multi-Agent System))
     Management
       ProjectManager
         仕様解析・作業計画・担当割当・指示生成 / Human-in-the-loop (interrupt)
@@ -139,11 +130,6 @@ mindmap
         pytest / ruff / mypy 自動実行 → test_results: dict
       CodeReviewNode
         品質・整合性・セキュリティ横断レビュー + テスト結果評価
-    RAG
-      SearchNode
-        ベクトル検索 / キーワード検索
-      AnalysisNode
-        技術スタック分析 / 要件抽出
     Delivery
       WriterNode
         UpWork納品物整形・品質チェック・ドキュメント生成
@@ -174,12 +160,6 @@ flowchart LR
     end
     subgraph database["database"]
         database_files["database_files<br/><i>dict[str, str]</i>"]
-    end
-    subgraph search["search"]
-        retrieved_docs["retrieved_docs<br/><i>list[dict]</i>"]
-    end
-    subgraph analysis["analysis"]
-        analysis_result["analysis_result<br/><i>str</i>"]
     end
     subgraph code_review["code_review"]
         code_review_feedback["code_review_feedback<br/><i>str</i>"]
@@ -214,8 +194,6 @@ flowchart LR
 | `backend_files` | `dict[str, str]` | `backend` | バックエンド成果物 |
 | `frontend_files` | `dict[str, str]` | `frontend` | フロントエンド成果物 |
 | `database_files` | `dict[str, str]` | `database` | データベース成果物 |
-| `retrieved_docs` | `list[dict]` | `search` | ベクトル検索結果 |
-| `analysis_result` | `str` | `analysis` | 技術分析結果 |
 | `test_results` | `dict[str, Any]` | `test_runner` | pytest/ruff/mypy 実行結果 |
 | `code_review_feedback` | `str` | `code_review` | 横断コードレビュー結果 |
 | `fix_targets` | `list[str]` | `code_review` | 修正が必要なエージェントリスト |
@@ -228,7 +206,7 @@ flowchart LR
 ---
 ## 5. @tool カタログ
 
-> 全エージェント合計 **55 ツール**
+> 全エージェント合計 **50 ツール**
 
 | エージェント | @tool 一覧 | 数 |
 |---|---|---|
@@ -240,8 +218,6 @@ flowchart LR
 | **ToolSpecialistNode** | `analyze_utility_requirements` / `implement_utility` / `generate_error_handling` / `generate_logging_config` / `generate_validation_utils` / `apply_fix` | 6 |
 | **TestRunnerNode** | `write_files_to_tempdir` / `run_pytest` / `run_ruff_check` / `run_mypy` | 4 |
 | **CodeReviewNode** | `review_files` / `evaluate_test_results` / `check_cross_consistency` / `check_security` / `identify_fix_targets` / `generate_feedback_summary` | 6 |
-| **SearchNode** | `semantic_search` / `keyword_search` | 2 |
-| **AnalysisNode** | `summarize` / `extract_facts` / `compare` | 3 |
 | **WriterNode** | `merge_all_files` / `write_readme` / `write_handover_doc` / `quality_check` / `format_for_upwork` | 5 |
 ---
 ## 6. ディレクトリ構造
@@ -259,24 +235,17 @@ test-BBQ/
         ├── test_runner_node.py                      # pytest/ruff/mypy 自動実行 → test_results: dict
         ├── code_review_node.py                      # 横断コードレビュー + テスト結果評価
         ├── review_manager_node.py                   # レビューループ制御 (max_review_loops)
-        ├── search_node.py                           # RAGベクトル検索
-        ├── analysis_node.py                         # 技術分析
         ├── writer_node.py                           # 納品物整形 → final_files + final_answer
 │
-    ├── settings.py                              # 設定 (LLM/RAG/AWS/Workflow)
-    ├── systemMessage.py                         # 全エージェントのシステムプロンプト (循環インポートなし)
+    ├── settings.py                              # 設定 (LLM/AWS/Workflow)
+    ├── systemMessage.py                         # 全エージェントのシステムプロンプト
 │
     ├── workflow.py                              # LangGraph StateGraph + MemorySaver定義
     ├── diagram_spec.py                          # 図の単一情報源 (ここを更新) ★
 │
-    ├── retriever.py                             # Retriever (semantic/keyword/hybrid)
-    ├── vector_store.py                          # VectorStore (Protocol抽象化)
-    ├── embeddings.py                            # EmbeddingModel
-│
     ├── secrets_manager.py                       # AWS Secrets Manager クライアント (TTLキャッシュ)
     ├── secret_keys.py                           # シークレット名定数
 │
-    ├── tool_registry.py                         # グローバル@toolカタログ
     ├── generate_diagram.py                      # Mermaid図自動生成スクリプト ★
 │
     ├── architecture.md                          # 生成されたアーキテクチャ図 (自動更新) ★
@@ -305,4 +274,4 @@ git commit -m "docs: アーキテクチャ図更新"
 
 ---
 
-*Auto-generated by `tools/generate_diagram.py` — UpWork Multi-Agent RAG System v1.5.0*
+*Auto-generated by `tools/generate_diagram.py` — UpWork Multi-Agent System v1.6.0*

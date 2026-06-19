@@ -1,8 +1,8 @@
 """
-CodeReviewNode — 全エージェントの生成コードを横断的にレビューする。
+CodeReviewNode — 全エージェントの生成コードと TestRunner 結果を横断的にレビューする。
 
-Backend / Frontend / Database / ToolSpecialist の成果物を受け取り、
-品質・一貫性・セキュリティ・仕様適合性を評価してフィードバックを生成する。
+dict[str, str] 形式の多ファイル成果物を受け取り、
+静的品質・整合性・セキュリティ・テスト結果を統合評価する。
 """
 
 from __future__ import annotations
@@ -19,10 +19,9 @@ class CodeReviewNode(AgentNode):
     コードレビュー専門エージェント。
 
     責務:
-      - 各成果物の品質チェック (可読性・保守性・テスト容易性)
-      - セキュリティ脆弱性検出 (OWASP Top 10 観点)
-      - バックエンド・フロントエンド・DB間の整合性確認
-      - 仕様との適合性確認
+      - dict[str, str] 形式の多ファイル成果物を受け取る
+      - TestRunner の実行結果 (test_results) も参照する
+      - 品質・整合性・セキュリティを横断評価する
       - 修正が必要なエージェントと具体的な修正箇所を特定する
     """
 
@@ -33,70 +32,81 @@ class CodeReviewNode(AgentNode):
     # ------------------------------------------------------------------
 
     @tool
-    def review_backend(self, backend_result: str, spec: str) -> dict[str, Any]:
+    def review_files(
+        self,
+        files: dict[str, str],
+        category: str,
+        spec: str,
+    ) -> dict[str, Any]:
         """
-        バックエンドコードをレビューする。
+        ファイル辞書をカテゴリ別にレビューする。
+        category: "backend" | "frontend" | "database" | "tool_specialist"
         Returns:
             passed   : bool
-            issues   : [{"severity": str, "location": str, "description": str, "suggestion": str}]
+            issues   : [{"severity": str, "file": str, "line": int, "description": str, "suggestion": str}]
             score    : int (0-100)
         """
         ...
 
     @tool
-    def review_frontend(self, frontend_result: str, spec: str) -> dict[str, Any]:
+    def evaluate_test_results(self, test_results: dict[str, Any]) -> dict[str, Any]:
         """
-        フロントエンドコードをレビューする。
-        アクセシビリティ・パフォーマンス・クロスブラウザ互換性を含む。
-        Returns: {"passed": bool, "issues": list, "score": int}
-        """
-        ...
-
-    @tool
-    def review_database(self, database_result: str, spec: str) -> dict[str, Any]:
-        """
-        DBスキーマ・クエリをレビューする。
-        正規化・インデックス設計・SQLインジェクション対策を確認する。
-        Returns: {"passed": bool, "issues": list, "score": int}
-        """
-        ...
-
-    @tool
-    def review_tools(self, tool_spec_result: str) -> dict[str, Any]:
-        """
-        ツール定義・実装をレビューする。
-        型安全性・副作用の明示・エラーハンドリングを確認する。
-        Returns: {"passed": bool, "issues": list, "score": int}
+        TestRunner の実行結果を評価し、失敗テストの原因を分析する。
+        Returns:
+            test_ok       : bool
+            failure_summary: str
+            affected_files : list[str]
         """
         ...
 
     @tool
     def check_cross_consistency(
         self,
-        backend_result: str,
-        frontend_result: str,
-        database_result: str,
+        backend_files:  dict[str, str],
+        frontend_files: dict[str, str],
+        database_files: dict[str, str],
     ) -> dict[str, Any]:
         """
-        バックエンド・フロントエンド・DB間の整合性を確認する。
-        APIエンドポイント・型定義・フィールド名の一致を検証する。
-        Returns: {"consistent": bool, "mismatches": list[str]}
+        バックエンド・フロントエンド・DB 間の整合性を確認する。
+        Returns:
+            consistent : bool
+            mismatches : list[{"location_a": str, "location_b": str, "issue": str}]
         """
         ...
 
     @tool
-    def check_security(self, all_code: str) -> list[dict[str, Any]]:
+    def check_security(self, all_files: dict[str, str]) -> list[dict[str, Any]]:
         """
         OWASP Top 10 観点でセキュリティ脆弱性を検出する。
-        Returns: [{"type": str, "location": str, "severity": "critical"|"high"|"medium"|"low"}]
+        Returns:
+            [{"type": str, "file": str, "line": int,
+              "severity": "critical"|"high"|"medium"|"low", "fix": str}]
         """
         ...
 
     @tool
-    def identify_fix_targets(self, review_results: dict[str, Any]) -> list[str]:
+    def identify_fix_targets(
+        self,
+        review_results: dict[str, Any],
+        test_evaluation: dict[str, Any],
+    ) -> list[str]:
         """
-        レビュー結果から修正が必要なエージェントを特定する。
+        レビュー結果とテスト結果から修正が必要なエージェントを特定する。
         Returns: ["backend", "frontend", "database", "tool_specialist"] の部分集合
+        """
+        ...
+
+    @tool
+    def generate_feedback_summary(
+        self,
+        review_results: dict[str, Any],
+        test_evaluation: dict[str, Any],
+        consistency: dict[str, Any],
+        security_issues: list[dict],
+    ) -> str:
+        """
+        全レビュー結果を一つの構造化フィードバック文字列にまとめる。
+        ReviewManager が参照する形式で出力する。
         """
         ...
 
@@ -106,19 +116,25 @@ class CodeReviewNode(AgentNode):
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """
-        全成果物をレビューし code_review_feedback と fix_targets を格納する。
-        初回レビュー・修正後レビュー両方で呼ばれる。
+        全成果物と TestRunner 結果をレビューし、
+        code_review_feedback と fix_targets を更新する。
         """
-        messages = self._build_messages(state)
-        response = self._bound_llm.invoke(messages)
+        response = self._invoke(state)
 
-        # TODO: tool_calls を実行してレビュー結果を集約する
-        code_review_feedback: str = ""
-        fix_targets: list[str] = []
+        # TODO: 各 tool_call を実行して review_results を集約する
+        # - review_files × 4 (backend / frontend / database / tool_specialist)
+        # - evaluate_test_results (test_results を参照)
+        # - check_cross_consistency
+        # - check_security (全ファイルを結合して渡す)
+        # - identify_fix_targets
+        # - generate_feedback_summary
+
+        code_review_feedback: str  = ""
+        fix_targets: list[str]     = []
 
         return {
             **state,
-            "messages":            state["messages"] + [response],
+            "messages":             state["messages"] + [response],
             "code_review_feedback": code_review_feedback,
-            "fix_targets":         fix_targets,
+            "fix_targets":          fix_targets,
         }

@@ -13,7 +13,7 @@ flowchart TD
     START(["🚀 START"]) --> PM
 
     subgraph MGMT["Management Layer"]
-        PM["ProjectManager\n仕様解析・担当割当・指示生成"]
+        PM["ProjectManager\n仕様解析・担当割当・指示生成\nHuman-in-the-loop: interrupt()"]
         RM["ReviewManager\nループ制御 MAX=2"]
     end
 
@@ -25,11 +25,13 @@ flowchart TD
     end
 
     subgraph QUALITY["Quality Gate"]
-        CR["CodeReviewNode\n横断レビュー"]
+        TR["TestRunnerNode\npytest / ruff / mypy"]
+        CR["CodeReviewNode\n横断レビュー + テスト結果評価"]
     end
 
-    PM ==>|"並列"| BE & FE & DB & TS
-    BE & FE & DB & TS -->|"収束"| CR
+    PM ==>|"interrupt() 承認後"| BE & FE & DB & TS
+    BE & FE & DB & TS -->|"収束"| TR
+    TR --> CR
     CR --> RM
     RM ==>|"修正 loop<2"| BE & FE & DB & TS
     RM -->|"完了 or loop≥2"| W["WriterNode"]
@@ -44,12 +46,11 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from langchain_core.messages import BaseMessage
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.constants import Send
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from typing_extensions import TypedDict
-
-from agents.nodes.review_manager_node import MAX_REVIEW_LOOPS
 
 
 class AgentState(TypedDict):
@@ -59,35 +60,40 @@ class AgentState(TypedDict):
     messages: Annotated[list[BaseMessage], add_messages]
 
     # ── 入力 ─────────────────────────────────────────────────────────
-    user_spec: str                    # UpWork クライアントからの仕様テキスト
+    user_spec: str                      # UpWork クライアントからの仕様テキスト
 
     # ── ProjectManager ────────────────────────────────────────────────
-    work_plan: str                    # 作業計画書
-    assigned_agents: list[str]        # 担当エージェント名リスト
+    work_plan: str                      # 作業計画書
+    assigned_agents: list[str]          # 担当エージェント名リスト
     agent_instructions: dict[str, str]  # エージェント名 → 指示文
+    human_feedback: str                 # interrupt() で受け取る人間の承認/修正
 
-    # ── 実装成果物 ────────────────────────────────────────────────────
-    tool_spec_result: str             # ToolSpecialistNode の成果物
-    backend_result: str               # BackendNode の成果物
-    frontend_result: str              # FrontendNode の成果物
-    database_result: str              # DatabaseNode の成果物
+    # ── 実装成果物 (dict[str, str]: ファイルパス → コード) ────────────
+    tool_spec_files: dict[str, str]
+    backend_files:   dict[str, str]
+    frontend_files:  dict[str, str]
+    database_files:  dict[str, str]
 
     # ── RAG ──────────────────────────────────────────────────────────
     retrieved_docs: list[dict[str, Any]]
     analysis_result: str
 
+    # ── テスト実行結果 ────────────────────────────────────────────────
+    test_results: dict[str, Any]        # TestRunnerNode の実行結果
+
     # ── コードレビュー ────────────────────────────────────────────────
-    code_review_feedback: str         # CodeReviewNode の総合フィードバック
-    fix_targets: list[str]            # 修正が必要なエージェント名リスト
+    code_review_feedback: str           # CodeReviewNode の総合フィードバック
+    fix_targets: list[str]              # 修正が必要なエージェント名リスト
 
     # ── ReviewManager ────────────────────────────────────────────────
-    review_loop_count: int            # レビューループ回数 (上限 MAX_REVIEW_LOOPS)
-    fix_instructions: dict[str, str]  # エージェント名 → 修正指示文
-    remaining_issues: str             # ループ上限到達後の残存課題
-    next: str                         # ルーティングシグナル ("fix" | "writer")
+    review_loop_count: int              # レビューループ回数 (上限 max_review_loops)
+    fix_instructions: dict[str, str]    # エージェント名 → 修正指示文
+    remaining_issues: str               # ループ上限到達後の残存課題
+    next: str                           # ルーティングシグナル ("fix" | "writer")
 
     # ── 最終納品物 ────────────────────────────────────────────────────
-    final_answer: str                 # UpWork 提出フォーマットの納品物
+    final_files:  dict[str, str]        # 全納品ファイル (merge済み)
+    final_answer: str                   # UpWork 提出フォーマットの納品物
 
 
 class MultiAgentWorkflow:
@@ -103,6 +109,7 @@ class MultiAgentWorkflow:
         frontend_node,
         database_node,
         tool_specialist_node,
+        test_runner_node,
         search_node,
         analysis_node,
         code_review_node,
@@ -114,6 +121,7 @@ class MultiAgentWorkflow:
         self.frontend         = frontend_node
         self.database         = database_node
         self.tool_specialist  = tool_specialist_node
+        self.test_runner      = test_runner_node
         self.search           = search_node
         self.analysis         = analysis_node
         self.code_review      = code_review_node
@@ -135,12 +143,11 @@ class MultiAgentWorkflow:
         targets = [a for a in agents if a in valid]
 
         if not targets:
-            return "writer"  # 担当なし → 直接 Writer へ
+            return "writer"
 
         if len(targets) == 1:
             return targets[0]
 
-        # 複数: 並列実行 (Send API)
         return [Send(agent, state) for agent in targets]
 
     def _dispatch_fixes_from_review_manager(self, state: AgentState) -> str | list:
@@ -168,8 +175,13 @@ class MultiAgentWorkflow:
     # Graph builder
     # ------------------------------------------------------------------
 
-    def compile(self):
-        """StateGraph をビルドしてコンパイル済みグラフを返す。"""
+    def compile(self, checkpointer: MemorySaver | None = None):
+        """
+        StateGraph をビルドしてコンパイル済みグラフを返す。
+
+        checkpointer に MemorySaver を渡すことで interrupt() (Human-in-the-loop)
+        が有効になる。省略時はステートレス動作 (interrupt() は使えない)。
+        """
         graph = StateGraph(AgentState)
 
         # ── ノード登録 ────────────────────────────────────────────────
@@ -178,6 +190,7 @@ class MultiAgentWorkflow:
         graph.add_node("frontend",        self.frontend.run)
         graph.add_node("database",        self.database.run)
         graph.add_node("tool_specialist", self.tool_specialist.run)
+        graph.add_node("test_runner",     self.test_runner.run)
         graph.add_node("search",          self.search.run)
         graph.add_node("analysis",        self.analysis.run)
         graph.add_node("code_review",     self.code_review.run)
@@ -192,17 +205,20 @@ class MultiAgentWorkflow:
             "project_manager",
             self._dispatch_from_project_manager,
             {
-                "backend":        "backend",
-                "frontend":       "frontend",
-                "database":       "database",
+                "backend":         "backend",
+                "frontend":        "frontend",
+                "database":        "database",
                 "tool_specialist": "tool_specialist",
-                "writer":         "writer",
+                "writer":          "writer",
             },
         )
 
-        # ── 実装ノード → CodeReview へ収束 (全員同じ宛先) ────────────
+        # ── 実装ノード → TestRunner へ収束 ───────────────────────────
         for node in ("backend", "frontend", "database", "tool_specialist"):
-            graph.add_edge(node, "code_review")
+            graph.add_edge(node, "test_runner")
+
+        # ── TestRunner → CodeReview ──────────────────────────────────
+        graph.add_edge("test_runner", "code_review")
 
         # ── CodeReview → ReviewManager ───────────────────────────────
         graph.add_edge("code_review", "review_manager")
@@ -223,4 +239,4 @@ class MultiAgentWorkflow:
         # ── Writer → 完了 ─────────────────────────────────────────────
         graph.add_edge("writer", END)
 
-        return graph.compile()
+        return graph.compile(checkpointer=checkpointer)

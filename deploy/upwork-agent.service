@@ -1,0 +1,52 @@
+[Unit]
+Description=UpWork Multi-Agent System API
+Documentation=https://github.com/BBQ-Meat999/test-BBQ
+After=network.target
+Requires=network.target
+
+[Service]
+Type=simple
+User=upwork-agent
+Group=upwork-agent
+WorkingDirectory=/opt/upwork-multiagent
+
+# 環境変数は /etc/upwork-multiagent/env から読み込む
+# (APIキーは AWS Secrets Manager 経由 — env ファイルには書かない)
+EnvironmentFile=/etc/upwork-multiagent/env
+
+# uvicorn をシングルワーカーで起動
+# MemorySaver (in-process checkpoint) を使うため workers=1 必須
+ExecStart=/opt/upwork-multiagent/.venv/bin/uvicorn server:app \
+    --host 0.0.0.0 \
+    --port 8080 \
+    --workers 1 \
+    --loop asyncio \
+    --log-level info \
+    --timeout-graceful-shutdown 30
+
+# SIGTERM で graceful shutdown (uvicorn がハンドルする)
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=60
+
+# 失敗時は 10 秒後に再起動 (60 秒以内に 3 回失敗したら停止)
+Restart=on-failure
+RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# systemd journal へ出力
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=upwork-agent
+
+# セキュリティハードニング
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+# ワーキングディレクトリと tmpfiles は書き込み可能にする
+ReadWritePaths=/opt/upwork-multiagent /var/log/upwork-agent /tmp
+
+[Install]
+WantedBy=multi-user.target

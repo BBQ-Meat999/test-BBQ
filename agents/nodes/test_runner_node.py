@@ -1,89 +1,36 @@
 """
-TestRunnerNode — 生成されたコードを実際に実行してテスト結果を収集する。
+TestRunnerNode — 生成されたコードを実際に実行して検証結果を収集する。
 
-Workers が生成したコードを一時ディレクトリに書き出し、
-pytest を subprocess で実行して結果を AgentState に格納する。
-CodeReview は静的レビュー + TestRunner の実行結果を両方参照する。
+Workers が生成した全ファイルを一時ディレクトリへ書き出し、
+pytest / ruff / mypy を subprocess で実行して結果を test_results に格納する。
+このノードは LLM を使わず、決定論的にツールを実行するだけ (常に Haiku 割当だが実質未使用)。
+CodeReview は静的レビュー + ここで得た実行結果の両方を参照する。
 """
 
 from __future__ import annotations
 
+import re
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any
 
-from langchain_core.tools import tool
+from langchain_core.messages import AIMessage
 
 from agents.Agent_Node import AgentNode
 
+# subprocess のタイムアウト (秒) — 生成コードが無限ループしても全体を止めない
+_TIMEOUT = 120
+
 
 class TestRunnerNode(AgentNode):
-    """
-    テスト実行専門エージェント。
-
-    責務:
-      - 生成されたコード (*_files) を一時ディレクトリに書き出す
-      - pytest / 静的解析ツールを subprocess で実行する
-      - テスト結果 (pass/fail/coverage/errors) を test_results に格納する
-      - 実行ログを code_review が参照できる形式で返す
-    """
+    """テスト実行専門エージェント (純 Python 実行)。"""
 
     node_name = "test_runner"
 
     # ------------------------------------------------------------------
-    # Tools
-    # ------------------------------------------------------------------
-
-    @tool
-    def write_files_to_tempdir(self, files: dict[str, str]) -> str:
-        """
-        ファイル辞書 {パス: コード} を一時ディレクトリに書き出す。
-        Returns: 一時ディレクトリのパス文字列
-        """
-        ...
-
-    @tool
-    def run_pytest(self, project_dir: str, test_paths: list[str] | None = None) -> dict[str, Any]:
-        """
-        pytest を subprocess で実行しテスト結果を返す。
-        Returns:
-            passed   : int    合格テスト数
-            failed   : int    失敗テスト数
-            errors   : int    エラー数
-            coverage : float  カバレッジ (%)
-            output   : str    pytest 出力ログ
-            success  : bool   全テスト合格か
-        """
-        ...
-
-    @tool
-    def run_ruff_check(self, project_dir: str) -> dict[str, Any]:
-        """
-        ruff で静的解析を実行する。
-        Returns:
-            violations : list[{"file": str, "line": int, "code": str, "message": str}]
-            clean      : bool  違反なしか
-        """
-        ...
-
-    @tool
-    def run_mypy(self, project_dir: str) -> dict[str, Any]:
-        """
-        mypy で型チェックを実行する。
-        Returns:
-            errors : list[{"file": str, "line": int, "message": str}]
-            clean  : bool
-        """
-        ...
-
-    @tool
-    def cleanup_tempdir(self, temp_dir: str) -> None:
-        """一時ディレクトリを削除する。"""
-        ...
-
-    # ------------------------------------------------------------------
-    # Internal helpers (実装時に使用)
+    # File collection
     # ------------------------------------------------------------------
 
     def _collect_all_files(self, state: dict[str, Any]) -> dict[str, str]:
@@ -93,54 +40,116 @@ class TestRunnerNode(AgentNode):
             merged.update(state.get(key) or {})
         return merged
 
-    def _write_and_run(self, files: dict[str, str]) -> dict[str, Any]:
-        """ファイルを書き出して pytest を実行する実装テンプレート。"""
-        with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
-            for rel_path, code in files.items():
-                dest = root / rel_path
-                dest.parent.mkdir(parents=True, exist_ok=True)
-                dest.write_text(code, encoding="utf-8")
-            # TODO: pytest を subprocess で実行してパース
-            result = subprocess.run(
-                ["python", "-m", "pytest", "--tb=short", "-q", str(root)],
-                capture_output=True, text=True, cwd=str(root)
+    # ------------------------------------------------------------------
+    # Subprocess helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _run(cmd: list[str], cwd: str) -> subprocess.CompletedProcess[str] | None:
+        """コマンドを実行する。ツール未インストール時は None を返す。"""
+        try:
+            return subprocess.run(
+                cmd, cwd=cwd, capture_output=True, text=True, timeout=_TIMEOUT
             )
+        except FileNotFoundError:
+            return None
+        except subprocess.TimeoutExpired:
+            return subprocess.CompletedProcess(cmd, returncode=124, stdout="", stderr="timeout")
+
+    @staticmethod
+    def _parse_pytest(output: str) -> dict[str, int]:
+        """pytest の終了サマリー行から passed/failed/errors を抽出する。"""
+        counts = {"passed": 0, "failed": 0, "errors": 0}
+        for key in counts:
+            m = re.search(rf"(\d+) {key}", output)
+            if m:
+                counts[key] = int(m.group(1))
+        return counts
+
+    def _run_pytest(self, root: Path) -> dict[str, Any]:
+        has_tests = any(
+            p.name.startswith("test_") or p.name.endswith("_test.py")
+            for p in root.rglob("*.py")
+        )
+        if not has_tests:
+            return {"ran": False, "passed": 0, "failed": 0, "errors": 0,
+                    "success": True, "output": "テストファイルなし — スキップ"}
+        proc = self._run(
+            [sys.executable, "-m", "pytest", "--tb=short", "-q", str(root)], str(root)
+        )
+        if proc is None:
+            return {"ran": False, "passed": 0, "failed": 0, "errors": 0,
+                    "success": True, "output": "pytest 未インストール — スキップ"}
+        out = (proc.stdout or "") + (proc.stderr or "")
+        counts = self._parse_pytest(out)
         return {
-            "output":  result.stdout + result.stderr,
-            "success": result.returncode == 0,
-            "passed":  0,  # TODO: parse from output
-            "failed":  0,
-            "errors":  0,
-            "coverage": None,
+            "ran": True,
+            **counts,
+            "success": proc.returncode == 0,
+            "output": out[-4000:],
         }
+
+    def _run_ruff(self, root: Path) -> dict[str, Any]:
+        proc = self._run(["ruff", "check", str(root)], str(root))
+        if proc is None:
+            return {"ran": False, "clean": True, "output": "ruff 未インストール — スキップ"}
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return {"ran": True, "clean": proc.returncode == 0, "output": out[-2000:]}
+
+    def _run_mypy(self, root: Path) -> dict[str, Any]:
+        proc = self._run(["mypy", "--ignore-missing-imports", str(root)], str(root))
+        if proc is None:
+            return {"ran": False, "clean": True, "output": "mypy 未インストール — スキップ"}
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return {"ran": True, "clean": proc.returncode == 0, "output": out[-2000:]}
 
     # ------------------------------------------------------------------
     # Node entry point
     # ------------------------------------------------------------------
 
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
-        """
-        全成果物ファイルを収集して実行し test_results を更新する。
-        """
-        response = self._invoke(state)
+        """全成果物を一時ディレクトリに展開して検証し test_results を更新する。"""
+        files = self._collect_all_files(state)
 
-        all_files = self._collect_all_files(state)
+        if not files:
+            results = {"passed": 0, "failed": 0, "errors": 0, "success": False,
+                       "pytest": {}, "ruff": {}, "mypy": {}, "output": "成果物なし"}
+            return {
+                "messages": [AIMessage(content="[test_runner] 成果物なし — 検証スキップ")],
+                "test_results": results,
+            }
 
-        # TODO: write_files_to_tempdir / run_pytest / run_ruff_check の tool_calls を実行
-        test_results: dict[str, Any] = {
-            "passed":   0,
-            "failed":   0,
-            "errors":   0,
-            "coverage": None,
-            "output":   "",
-            "ruff":     {},
-            "mypy":     {},
-            "success":  False,
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            for rel_path, code in files.items():
+                # パストラバーサル防止: 一時ディレクトリ外への書き込みを拒否
+                dest = (root / rel_path).resolve()
+                if not str(dest).startswith(str(root.resolve())):
+                    continue
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                dest.write_text(code, encoding="utf-8")
+
+            pytest_res = self._run_pytest(root)
+            ruff_res   = self._run_ruff(root)
+            mypy_res   = self._run_mypy(root)
+
+        success = pytest_res.get("success", False) and ruff_res.get("clean", True)
+        results = {
+            "passed":  pytest_res.get("passed", 0),
+            "failed":  pytest_res.get("failed", 0),
+            "errors":  pytest_res.get("errors", 0),
+            "success": success,
+            "pytest":  pytest_res,
+            "ruff":    ruff_res,
+            "mypy":    mypy_res,
+            "output":  pytest_res.get("output", ""),
         }
-
+        summary = (
+            f"[test_runner] pytest passed={results['passed']} "
+            f"failed={results['failed']} errors={results['errors']} "
+            f"ruff_clean={ruff_res.get('clean')} mypy_clean={mypy_res.get('clean')}"
+        )
         return {
-            **state,
-            "messages":    state["messages"] + [response],
-            "test_results": test_results,
+            "messages": [AIMessage(content=summary)],
+            "test_results": results,
         }

@@ -1,8 +1,8 @@
 """
-Global configuration for the multi-agent RAG system.
+Global configuration for the UpWork multi-agent system.
 
 Non-sensitive values  → environment variables (see .env.example)
-Sensitive credentials → AWS Secrets Manager via secrets.SecretsManager
+Sensitive credentials → AWS Secrets Manager via app_secrets.SecretsManager
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ class Settings:
     @cached_property
     def anthropic_api_key(self) -> str:
         """Retrieve the Anthropic API key from AWS Secrets Manager."""
-        from secrets.secrets_manager import SecretsManager
+        from app_secrets.secrets_manager import SecretsManager
         return SecretsManager.get_instance().get_anthropic_api_key()
 
 

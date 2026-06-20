@@ -19,9 +19,8 @@ generate_diagram.py — Mermaid アーキテクチャ図の自動生成スクリ
 from __future__ import annotations
 
 import importlib.util
-import sys
 import textwrap
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -51,7 +50,6 @@ LAYER_META: dict[str, dict] = {
     "management": {"label": "Management Layer",  "style": "fill:#ffecd2,stroke:#e67e22"},
     "worker":     {"label": "Worker Layer",      "style": "fill:#d5f5e3,stroke:#27ae60"},
     "quality":    {"label": "Quality Gate",      "style": "fill:#fde8e8,stroke:#e74c3c"},
-    "rag":        {"label": "RAG Layer",         "style": "fill:#d6eaf8,stroke:#2980b9"},
     "delivery":   {"label": "Delivery",          "style": "fill:#f8f9fa,stroke:#7f8c8d"},
 }
 
@@ -80,7 +78,6 @@ def build_system_flowchart() -> str:
     lines: list[str] = ["```mermaid", "flowchart TD"]
 
     # subgraph per layer
-    node_by_id = {n["id"]: n for n in NODES}
     layers: dict[str, list[dict]] = {}
     for n in NODES:
         layers.setdefault(n["layer"], []).append(n)
@@ -175,7 +172,6 @@ def build_agent_mindmap() -> str:
         "management": "Management",
         "worker":     "Workers",
         "quality":    "Quality Gate",
-        "rag":        "RAG",
         "delivery":   "Delivery",
     }
     layers: dict[str, list[dict]] = {}
@@ -210,7 +206,6 @@ def build_state_flow() -> str:
     writer_order = [
         "input", "project_manager", "tool_specialist",
         "backend", "frontend", "database",
-        "search", "analysis",
         "code_review", "review_manager", "writer", "all",
     ]
 
@@ -233,7 +228,7 @@ def build_state_flow() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_tool_table() -> str:
-    rows = ["| エージェント | @tool 一覧 | 数 |", "|---|---|---|"]
+    rows = ["| エージェント | 主な処理 / 出力 | 数 |", "|---|---|---|"]
     for n in NODES:
         tools_str = " / ".join(f"`{t}`" for t in n["tools"])
         rows.append(f'| **{n["label"]}** | {tools_str} | {len(n["tools"])} |')
@@ -256,7 +251,7 @@ def build_directory_tree() -> str:
 
         # ディレクトリ区切り線
         if depth > 0 and (not prev_parts or parts[0] != prev_parts[0]):
-            lines.append(f"│")
+            lines.append("│")
         prev_parts = parts
 
         star = " ★" if "★" in desc else ""
@@ -272,7 +267,7 @@ def build_directory_tree() -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_markdown() -> str:
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now = datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")
     total_tools = sum(len(n["tools"]) for n in NODES)
 
     sections = [
@@ -294,7 +289,6 @@ def build_markdown() -> str:
         "|---|---|",
         "| `-->` | 通常遷移 |",
         "| `==>` | Send API 並列実行 |",
-        "| `-.->` | オプション (RAG) |",
 
         "---",
 
@@ -329,9 +323,9 @@ def build_markdown() -> str:
 
         "---",
 
-        "## 5. @tool カタログ",
+        "## 5. ノード別 主な処理 / 出力",
         "",
-        f"> 全エージェント合計 **{total_tools} ツール**",
+        f"> 全ノード合計 **{total_tools} 処理項目**",
         "",
         build_tool_table(),
 

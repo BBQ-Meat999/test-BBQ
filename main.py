@@ -104,7 +104,9 @@ def run(spec: str, reward_amount: float = 0.0, thread_id: str = "default") -> st
     ----------
     spec          : クライアントから受け取った仕様テキスト
     reward_amount : UpWork 報奨金 (USD)。モデル選択の基準。
-                    例: 50.0 → SMART_SMALL、200.0 → SONNET_ALL
+                    現行パラメータでの目安: ~$2以下 → HAIKU_ONLY、
+                    ~$3-33 → SONNET_ALL、$34以上 → OPUS_ALL
+                    (詳細は config/model_selector.py の選択方式を参照)
     thread_id     : Human-in-the-loop 再開用スレッドID
     """
     app = build_app(use_human_in_loop=True)

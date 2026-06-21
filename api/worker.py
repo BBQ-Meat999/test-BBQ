@@ -20,6 +20,7 @@ from typing import Any
 from langgraph.types import Command
 
 from api.job_store import Job, JobStatus
+from discord_bot import notifier as discord_notifier
 
 logger = logging.getLogger(__name__)
 
@@ -112,11 +113,13 @@ def _run_job_sync(job: Job, initial_state: dict[str, Any]) -> None:
             job.estimated_cost or 0,
             job.estimated_profit or 0,
         )
+        discord_notifier.notify_job_completed(job)
 
     except Exception:
         job.status = JobStatus.failed
         job.error  = traceback.format_exc()
         logger.exception("job_id=%s failed", job.job_id)
+        discord_notifier.notify_job_completed(job)
 
 
 async def submit_job(job: Job, initial_state: dict[str, Any]) -> None:

@@ -60,11 +60,33 @@ class Settings:
         self.workflow = WorkflowConfig()
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
+
     @cached_property
     def anthropic_api_key(self) -> str:
         """Retrieve the Anthropic API key from AWS Secrets Manager."""
         from app_secrets.secrets_manager import SecretsManager
         return SecretsManager.get_instance().get_anthropic_api_key()
+
+    @cached_property
+    def discord_delivery_channel_id(self) -> int | None:
+        """Discord 成果物投稿チャンネル ID を AWS Secrets Manager から取得する。"""
+        try:
+            from app_secrets.secrets_manager import SecretsManager
+            return SecretsManager.get_instance().get_discord_delivery_channel_id()
+        except Exception:
+            return None
+
+    @cached_property
+    def discord_bot_token(self) -> str | None:
+        """
+        Discord ボットトークンを AWS Secrets Manager から取得する。
+        未設定またはエラーの場合は None を返し、Discord 機能を無効化する。
+        """
+        try:
+            from app_secrets.secrets_manager import SecretsManager
+            return SecretsManager.get_instance().get_discord_token()
+        except Exception:
+            return None
 
 
 # Singleton used across the application

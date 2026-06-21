@@ -167,6 +167,17 @@ class SecretsManager:
     def get_anthropic_api_key(self) -> str:
         return self.get_field(SecretName.ANTHROPIC, SecretField.ANTHROPIC_API_KEY)
 
+    def get_discord_token(self) -> str:
+        return self.get_field(SecretName.EXTERNAL_SERVICES, SecretField.DISCORD_BOT_TOKEN)
+
+    def get_discord_delivery_channel_id(self) -> int | None:
+        """成果物を投稿する Discord チャンネル ID を返す。未設定なら None。"""
+        try:
+            raw = self.get_field(SecretName.EXTERNAL_SERVICES, SecretField.DISCORD_DELIVERY_CHANNEL_ID)
+            return int(raw) if raw.isdigit() else None
+        except Exception:
+            return None
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

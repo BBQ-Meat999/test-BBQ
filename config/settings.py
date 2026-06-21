@@ -60,15 +60,21 @@ class Settings:
         self.workflow = WorkflowConfig()
         self.log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
-        # Discord (非機密値は env 変数から取得)
-        raw_ch = os.getenv("DISCORD_DELIVERY_CHANNEL_ID", "")
-        self.discord_delivery_channel_id: int | None = int(raw_ch) if raw_ch.isdigit() else None
 
     @cached_property
     def anthropic_api_key(self) -> str:
         """Retrieve the Anthropic API key from AWS Secrets Manager."""
         from app_secrets.secrets_manager import SecretsManager
         return SecretsManager.get_instance().get_anthropic_api_key()
+
+    @cached_property
+    def discord_delivery_channel_id(self) -> int | None:
+        """Discord 成果物投稿チャンネル ID を AWS Secrets Manager から取得する。"""
+        try:
+            from app_secrets.secrets_manager import SecretsManager
+            return SecretsManager.get_instance().get_discord_delivery_channel_id()
+        except Exception:
+            return None
 
     @cached_property
     def discord_bot_token(self) -> str | None:

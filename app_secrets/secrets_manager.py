@@ -167,6 +167,9 @@ class SecretsManager:
     def get_anthropic_api_key(self) -> str:
         return self.get_field(SecretName.ANTHROPIC, SecretField.ANTHROPIC_API_KEY)
 
+    def get_discord_token(self) -> str:
+        return self.get_field(SecretName.EXTERNAL_SERVICES, SecretField.DISCORD_BOT_TOKEN)
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------

@@ -24,6 +24,8 @@ dependencies = [
     # FastAPI サーバー
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",
+    # Discord ボット
+    "discord-py>=2.4.0",
 ]
 
 [project.optional-dependencies]

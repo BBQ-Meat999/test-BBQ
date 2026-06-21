@@ -38,3 +38,6 @@ class SecretField:
     VECTOR_DB_USER     = "username"
     VECTOR_DB_PASSWORD = "password"
     VECTOR_DB_NAME     = "database"
+
+    # Fields inside SecretName.EXTERNAL_SERVICES
+    DISCORD_BOT_TOKEN = "discord_bot_token"

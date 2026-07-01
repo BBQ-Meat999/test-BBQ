@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage
 
 from agents.Agent_Node import AgentNode
 from agents.schemas import Delivery
+from agents.tools import FileWorkspace
 
 
 class WriterNode(AgentNode):
@@ -33,10 +34,13 @@ class WriterNode(AgentNode):
         """全成果物を統合して final_files と final_answer を生成する。"""
         merged = self._merge_files(state)
 
-        delivery: Delivery = self._generate(
+        # read_file / list_files で各成果物を精査してから納品物を執筆できるようにする
+        workspace = FileWorkspace(readonly_peers=merged)
+        delivery: Delivery = self._run_agent(
             state,
             Delivery,
             extra=[self._full_artifacts_message(state)],
+            tools=workspace.as_tools(include_write=False),
         )
 
         final_files = dict(merged)

@@ -33,7 +33,7 @@ NODES: list[dict] = [
         "role":  "①モデル選択(利益最大化・システム側) ②仕様解析・担当割当 ③Human-in-the-loop (interrupt)",
         "tools": [
             "ModelSelector(決定論的割当)",
-            "WorkPlan構造化出力",
+            "WorkPlan関数コール (function calling)",
             "interrupt()承認",
             "修正指示の反映(再生成)",
         ],
@@ -45,7 +45,7 @@ NODES: list[dict] = [
         "role":  "レビュー結果解析・修正指示生成・ループ制御 (最大 max_review_loops 回・決定論的)",
         "tools": [
             "escalate判定(決定論的)",
-            "ReviewDecision構造化出力",
+            "ReviewDecision関数コール (function calling)",
             "fix_instructions生成",
             "remaining_issues要約",
         ],
@@ -57,9 +57,9 @@ NODES: list[dict] = [
         "layer": "worker",
         "role":  "Python / FastAPI / pytest → backend_files: dict[str, str]",
         "tools": [
-            "FileSet構造化出力",
+            "write_file/read_file ツールコール",
             "API実装+pytest+依存定義",
-            "修正指示の上書きマージ",
+            "WorkerSubmissionで完了通知",
         ],
     },
     {
@@ -68,9 +68,9 @@ NODES: list[dict] = [
         "layer": "worker",
         "role":  "React / TypeScript / CSS → frontend_files: dict[str, str]",
         "tools": [
-            "FileSet構造化出力",
+            "write_file/read_file ツールコール",
             "HTML/CSS/TSコンポーネント+API連携",
-            "修正指示の上書きマージ",
+            "WorkerSubmissionで完了通知",
         ],
     },
     {
@@ -79,9 +79,9 @@ NODES: list[dict] = [
         "layer": "worker",
         "role":  "SQLAlchemy / Alembic / ERD → database_files: dict[str, str]",
         "tools": [
-            "FileSet構造化出力",
+            "write_file/read_file ツールコール",
             "ORMモデル+マイグレーション+Repository",
-            "修正指示の上書きマージ",
+            "WorkerSubmissionで完了通知",
         ],
     },
     {
@@ -90,9 +90,9 @@ NODES: list[dict] = [
         "layer": "worker",
         "role":  "共有ユーティリティ実装 → tool_spec_files: dict[str, str]",
         "tools": [
-            "FileSet構造化出力",
+            "write_file/read_file ツールコール",
             "バリデーション/例外/ログ等の共通基盤",
-            "修正指示の上書きマージ",
+            "WorkerSubmissionで完了通知",
         ],
     },
     # Quality Gate
@@ -114,7 +114,7 @@ NODES: list[dict] = [
         "layer": "quality",
         "role":  "品質・整合性・セキュリティ横断レビュー + テスト結果評価",
         "tools": [
-            "ReviewResult構造化出力",
+            "ReviewResult関数コール + read_file精査",
             "フルコード+テスト結果の横断評価",
             "OWASP観点セキュリティ確認",
             "fix_targets特定",
@@ -128,7 +128,7 @@ NODES: list[dict] = [
         "role":  "UpWork納品物整形・品質チェック・ドキュメント生成",
         "tools": [
             "全成果物マージ(純Python)",
-            "Delivery構造化出力",
+            "Delivery関数コール + read_file精査",
             "README/引き渡しドキュメント生成",
             "final_files + final_answer",
         ],
@@ -242,11 +242,12 @@ HUMAN_IN_LOOP = {
 # ─────────────────────────────────────────────────────────────────────────────
 
 DIRECTORY_STRUCTURE: list[tuple[str, str]] = [
-    ("agents/Agent_Node.py",                    "基底クラス: 動的モデル選択・構造化出力・ContextManager"),
-    ("agents/schemas.py",                       "★ 構造化出力スキーマ (WorkPlan/FileSet/ReviewResult等)"),
+    ("agents/Agent_Node.py",                    "基底クラス: 動的モデル選択・tool-useループ(_run_agent)・ContextManager"),
+    ("agents/schemas.py",                       "★ 関数スキーマ (WorkPlan/WorkerSubmission/ReviewResult等)"),
+    ("agents/tools/workspace.py",               "★ FileWorkspace: write_file/read_file/list_files 実行可能ツール"),
     ("agents/utils/context_manager.py",         "ContextManager: メッセージトリム・アーティファクト要約"),
     ("agents/nodes/project_manager_node.py",    "最上位オーケストレーター + Human-in-the-loop"),
-    ("agents/nodes/worker_base.py",             "WorkerNode基底: FileSet生成・修正マージの共通実装"),
+    ("agents/nodes/worker_base.py",             "WorkerNode基底: write_fileツールで成果物を組み立てる共通実装"),
     ("agents/nodes/backend_node.py",            "Python/FastAPI専門 → backend_files: dict[str,str]"),
     ("agents/nodes/frontend_node.py",           "フロントエンド専門 → frontend_files: dict[str,str]"),
     ("agents/nodes/database_node.py",           "DB設計・実装専門 → database_files: dict[str,str]"),

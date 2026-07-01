@@ -57,7 +57,7 @@ class ProjectManagerNode(AgentNode):
         }
 
         # ── Step 2: 仕様解析・計画立案 (PM 自身も割当モデルで実行) ───────
-        plan: WorkPlan = self._generate(state_wm, WorkPlan)
+        plan: WorkPlan = self._run_agent(state_wm, WorkPlan)
         assigned = self._normalize_assignments(plan)
 
         # ── Step 3: Human-in-the-loop ─────────────────────────────────────
@@ -90,7 +90,7 @@ class ProjectManagerNode(AgentNode):
 
             # 'approve' 以外のフィードバックは計画へ反映して再生成する
             if feedback and feedback.strip().lower() != "approve":
-                revised = self._generate(
+                revised = self._run_agent(
                     state_wm,
                     WorkPlan,
                     extra=[HumanMessage(content=(

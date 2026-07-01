@@ -53,7 +53,7 @@ class ReviewManagerNode(AgentNode):
             remaining_issues = ""
             # 上限到達かつ未解決の指摘が残る場合のみ残存課題を要約する
             if loop_count >= self.max_loops and feedback and not test_ok:
-                decision: ReviewDecision = self._generate(
+                decision: ReviewDecision = self._run_agent(
                     state,
                     ReviewDecision,
                     extra=[HumanMessage(content=(
@@ -75,7 +75,7 @@ class ReviewManagerNode(AgentNode):
             }
 
         # ── 修正ループ継続: 各ワーカーへの修正指示を生成 ─────────────────
-        decision = self._generate(
+        decision = self._run_agent(
             state,
             ReviewDecision,
             extra=[HumanMessage(content=(

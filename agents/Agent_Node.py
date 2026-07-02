@@ -4,12 +4,17 @@ Base AgentNode class.
 全エージェントノードの基底クラス。
   - 報奨金に応じて選択された Claude モデルを動的に切り替える
   - コンテキストを圧縮したメッセージ列を組み立てる (コード成果物は messages に載せない)
-  - `with_structured_output` による型付き生成のヘルパーを提供する
+  - Anthropic function calling (tool use) による生成ヘルパーを提供する
 
-旧実装では @tool デコレータ付きメソッドを LLM にバインドしようとしていたが、
-LangChain の @tool はインスタンスメソッド (self 付き) を扱えず、本体も空だったため
-実際には機能していなかった。本システムのノードはコードを「生成」するのが仕事であり、
-正しいプリミティブは構造化出力 (with_structured_output) であるため、そちらへ統一した。
+【生成方式 — function calling へ全面移行】
+  以前は `llm.with_structured_output(Schema)` で構造化出力を得ていたが、
+  本システムは LangChain の `bind_tools` による明示的なファンクションコーリングへ統一した。
+    - 各ノードは自分の結果スキーマ (WorkPlan / ReviewResult 等) を「submit 関数」として
+      バインドし、LLM がそれを呼び出すことで型付き結果を受け取る。
+    - ワーカー・Writer・CodeReview はさらに write_file / read_file / list_files などの
+      実行可能ツールを持ち、LLM が能動的にツールを呼んで成果物を組み立てる
+      (AgentExecutor 型の tool-use ループ)。
+  ループの実体は `_run_agent()` に集約されている。
 """
 
 from __future__ import annotations
@@ -19,8 +24,14 @@ from collections.abc import Callable, Sequence
 from typing import Any, TypeVar
 
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage
-from pydantic import BaseModel
+from langchain_core.messages import (
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
+from langchain_core.tools import BaseTool
+from pydantic import BaseModel, ValidationError
 
 from agents.utils.context_manager import ContextManager
 from config.settings import settings
@@ -31,6 +42,9 @@ TModel = TypeVar("TModel", bound=BaseModel)
 # 1 ファイルあたりにレビュー/納品ノードへ渡す最大文字数 (コンテキスト保護)
 _MAX_FILE_CHARS_FOR_REVIEW = 6_000
 
+# tool-use ループの既定の最大反復回数 (無限ループ防止)
+_DEFAULT_MAX_ITERATIONS = 12
+
 
 class AgentNode(ABC):
     """
@@ -39,7 +53,7 @@ class AgentNode(ABC):
     責務:
       - state["model_assignments"] に基づき Claude モデルを動的に選択する
       - コンテキストを圧縮したメッセージ列を組み立てる
-      - 構造化出力 (Pydantic スキーマ) で型付きの結果を取得する
+      - function calling (tool use) で型付きの結果・成果物を取得する
     """
 
     node_name: str = "base_agent"
@@ -77,7 +91,7 @@ class AgentNode(ABC):
         ルール:
           - コード/成果物は専用フィールド (*_files, *_results) に書き込む
           - state["messages"] にフルコードを追加しない (短い要約のみ)
-          - 生成は _generate() / _generate_text() を使う
+          - 生成は _run_agent() を使う (function calling)
         """
         ...
 
@@ -149,34 +163,103 @@ class AgentNode(ABC):
         return HumanMessage(content="\n".join(parts))
 
     # ------------------------------------------------------------------
-    # LLM invocation
+    # Function-calling agent loop
     # ------------------------------------------------------------------
 
-    def _generate(
+    def _run_agent(
         self,
         state: dict[str, Any],
-        schema: type[TModel],
+        result_schema: type[TModel],
+        *,
         extra: Sequence[BaseMessage] | None = None,
+        tools: Sequence[BaseTool] | None = None,
+        max_iterations: int = _DEFAULT_MAX_ITERATIONS,
     ) -> TModel:
         """
-        割り当てモデルで構造化出力を生成し、Pydantic オブジェクトを返す。
+        function calling による tool-use ループを実行し、型付き結果を返す。
+
+        動作:
+          - result_schema を「submit 関数」としてバインドする (名前 = クラス名)。
+          - tools (write_file 等の実行可能ツール) があれば併せてバインドし、
+            tool_choice="any" で毎ターン必ずいずれかのツールを呼ばせる。
+          - LLM が submit 関数を呼んだら、その引数を result_schema へ検証して返す。
+          - tools が無い決定系ノード (PM/ReviewManager/Writer) は submit を強制し
+            実質 1 回のファンクションコールで結果を得る。
+
+        Parameters
+        ----------
+        result_schema : LLM に呼ばせる結果スキーマ (Pydantic)。返り値の型。
+        tools         : 追加の実行可能ツール (省略時は submit のみ)。
+        max_iterations: tool-use ループの最大反復回数。
         """
         llm = self._get_llm(self._model_for(state))
-        structured = llm.with_structured_output(schema)
-        messages = self._build_messages(state, extra=extra)
-        result = structured.invoke(messages)
-        return result  # type: ignore[return-value]
+        exec_tools: list[BaseTool] = list(tools or [])
+        submit_name = result_schema.__name__
 
-    def _generate_text(
-        self,
-        state: dict[str, Any],
-        extra: Sequence[BaseMessage] | None = None,
-    ) -> str:
-        """割り当てモデルで自由形式テキストを生成する。"""
-        llm = self._get_llm(self._model_for(state))
-        messages = self._build_messages(state, extra=extra)
-        response = llm.invoke(messages)
-        return response.content if isinstance(response.content, str) else str(response.content)
+        all_tools: list[Any] = [*exec_tools, result_schema]
+        if exec_tools:
+            # 実行可能ツールがある: 毎ターンいずれかのツールを必ず呼ばせる
+            bound = llm.bind_tools(all_tools, tool_choice="any")
+        else:
+            # 決定系ノード: submit 関数を直接強制する (1 コールで完了)
+            bound = llm.bind_tools(all_tools, tool_choice=submit_name)
+
+        messages: list[BaseMessage] = list(self._build_messages(state, extra=extra))
+        tool_map = {t.name: t for t in exec_tools}
+
+        for _ in range(max_iterations):
+            ai = bound.invoke(messages)
+            messages.append(ai)
+            tool_calls = getattr(ai, "tool_calls", None) or []
+
+            if not tool_calls:
+                # ツールを呼ばなかった: 明示的に促してリトライ
+                messages.append(HumanMessage(content=(
+                    f"必ずツールを呼び出してください。完了時は `{submit_name}` を呼びます。"
+                )))
+                continue
+
+            finished_value: TModel | None = None
+            for call in tool_calls:
+                name = call.get("name", "")
+                args = call.get("args", {}) or {}
+                call_id = call.get("id", "") or name
+
+                if name == submit_name:
+                    try:
+                        finished_value = result_schema.model_validate(args)
+                        messages.append(ToolMessage(
+                            content="OK: 受理しました。",
+                            tool_call_id=call_id,
+                        ))
+                    except ValidationError as exc:
+                        # 引数が不正: エラーを返して再生成させる
+                        messages.append(ToolMessage(
+                            content=f"ERROR: 引数が不正です。修正して再度 {submit_name} を呼んでください。\n{exc}",
+                            tool_call_id=call_id,
+                        ))
+                    continue
+
+                tool = tool_map.get(name)
+                if tool is None:
+                    messages.append(ToolMessage(
+                        content=f"ERROR: 未知のツール '{name}'。",
+                        tool_call_id=call_id,
+                    ))
+                    continue
+                try:
+                    output = tool.invoke(args)
+                except Exception as exc:  # noqa: BLE001 — ツール実行失敗も LLM に返して継続
+                    output = f"ERROR: ツール実行失敗: {exc}"
+                messages.append(ToolMessage(content=str(output), tool_call_id=call_id))
+
+            if finished_value is not None:
+                return finished_value
+
+        raise RuntimeError(
+            f"{self.node_name}: {max_iterations} 反復以内に `{submit_name}` が"
+            "呼ばれませんでした (function calling ループ上限到達)。"
+        )
 
     def __repr__(self) -> str:
         return f"<{self.__class__.__name__} node_name={self.node_name!r}>"

@@ -14,6 +14,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from agents.Agent_Node import AgentNode
 from agents.schemas import ReviewResult
+from agents.tools import FileWorkspace
 
 ASSIGNABLE_AGENTS = ["backend", "frontend", "database", "tool_specialist"]
 
@@ -35,10 +36,25 @@ class CodeReviewNode(AgentNode):
             f"  pytest出力(末尾):\n{tr.get('output', '')[:1500]}"
         ))
 
+    def _all_artifacts(self, state: dict[str, Any]) -> dict[str, str]:
+        """read_file で参照できる全ワーカー成果物を集約する。"""
+        merged: dict[str, str] = {}
+        for key in ("tool_spec_files", "backend_files", "frontend_files", "database_files"):
+            merged.update(state.get(key) or {})
+        return merged
+
     def run(self, state: dict[str, Any]) -> dict[str, Any]:
         """全成果物と TestRunner 結果をレビューし feedback / fix_targets を更新する。"""
         extra = [self._full_artifacts_message(state), self._test_results_message(state)]
-        result: ReviewResult = self._generate(state, ReviewResult, extra=extra)
+
+        # read_file / list_files で個別ファイルを精査できるようにする (書き込みは不可)
+        workspace = FileWorkspace(readonly_peers=self._all_artifacts(state))
+        result: ReviewResult = self._run_agent(
+            state,
+            ReviewResult,
+            extra=extra,
+            tools=workspace.as_tools(include_write=False),
+        )
 
         fix_targets = [t for t in result.fix_targets if t in ASSIGNABLE_AGENTS]
 

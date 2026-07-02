@@ -1,5 +1,5 @@
 # UpWork Multi-Agent System — Architecture
-> **Version:** 2.0.0  |  **Generated:** 2026-06-19 14:03 UTC  |  **Source:** `graph/diagram_spec.py`
+> **Version:** 2.0.0  |  **Generated:** 2026-07-01 10:53 UTC  |  **Source:** `graph/diagram_spec.py`
 
 > [!WARNING]
 > このファイルは自動生成です。直接編集しないでください。
@@ -217,26 +217,27 @@ flowchart LR
 
 | エージェント | 主な処理 / 出力 | 数 |
 |---|---|---|
-| **ProjectManager** | `ModelSelector(決定論的割当)` / `WorkPlan構造化出力` / `interrupt()承認` / `修正指示の反映(再生成)` | 4 |
-| **ReviewManager** | `escalate判定(決定論的)` / `ReviewDecision構造化出力` / `fix_instructions生成` / `remaining_issues要約` | 4 |
-| **BackendNode** | `FileSet構造化出力` / `API実装+pytest+依存定義` / `修正指示の上書きマージ` | 3 |
-| **FrontendNode** | `FileSet構造化出力` / `HTML/CSS/TSコンポーネント+API連携` / `修正指示の上書きマージ` | 3 |
-| **DatabaseNode** | `FileSet構造化出力` / `ORMモデル+マイグレーション+Repository` / `修正指示の上書きマージ` | 3 |
-| **ToolSpecialistNode** | `FileSet構造化出力` / `バリデーション/例外/ログ等の共通基盤` / `修正指示の上書きマージ` | 3 |
+| **ProjectManager** | `ModelSelector(決定論的割当)` / `WorkPlan関数コール (function calling)` / `interrupt()承認` / `修正指示の反映(再生成)` | 4 |
+| **ReviewManager** | `escalate判定(決定論的)` / `ReviewDecision関数コール (function calling)` / `fix_instructions生成` / `remaining_issues要約` | 4 |
+| **BackendNode** | `write_file/read_file ツールコール` / `API実装+pytest+依存定義` / `WorkerSubmissionで完了通知` | 3 |
+| **FrontendNode** | `write_file/read_file ツールコール` / `HTML/CSS/TSコンポーネント+API連携` / `WorkerSubmissionで完了通知` | 3 |
+| **DatabaseNode** | `write_file/read_file ツールコール` / `ORMモデル+マイグレーション+Repository` / `WorkerSubmissionで完了通知` | 3 |
+| **ToolSpecialistNode** | `write_file/read_file ツールコール` / `バリデーション/例外/ログ等の共通基盤` / `WorkerSubmissionで完了通知` | 3 |
 | **TestRunnerNode** | `一時ディレクトリ展開` / `pytest subprocess実行` / `ruff / mypy 静的解析` / `結果パース` | 4 |
-| **CodeReviewNode** | `ReviewResult構造化出力` / `フルコード+テスト結果の横断評価` / `OWASP観点セキュリティ確認` / `fix_targets特定` | 4 |
-| **WriterNode** | `全成果物マージ(純Python)` / `Delivery構造化出力` / `README/引き渡しドキュメント生成` / `final_files + final_answer` | 4 |
+| **CodeReviewNode** | `ReviewResult関数コール + read_file精査` / `フルコード+テスト結果の横断評価` / `OWASP観点セキュリティ確認` / `fix_targets特定` | 4 |
+| **WriterNode** | `全成果物マージ(純Python)` / `Delivery関数コール + read_file精査` / `README/引き渡しドキュメント生成` / `final_files + final_answer` | 4 |
 ---
 ## 6. ディレクトリ構造
 
 ```
 test-BBQ/
 │
-    ├── Agent_Node.py                            # 基底クラス: 動的モデル選択・構造化出力・ContextManager
-    ├── schemas.py                               # 構造化出力スキーマ (WorkPlan/FileSet/ReviewResult等) ★
+    ├── Agent_Node.py                            # 基底クラス: 動的モデル選択・tool-useループ(_run_agent)・ContextManager
+    ├── schemas.py                               # 関数スキーマ (WorkPlan/WorkerSubmission/ReviewResult等) ★
+        ├── workspace.py                             # FileWorkspace: write_file/read_file/list_files 実行可能ツール ★
         ├── context_manager.py                       # ContextManager: メッセージトリム・アーティファクト要約
         ├── project_manager_node.py                  # 最上位オーケストレーター + Human-in-the-loop
-        ├── worker_base.py                           # WorkerNode基底: FileSet生成・修正マージの共通実装
+        ├── worker_base.py                           # WorkerNode基底: write_fileツールで成果物を組み立てる共通実装
         ├── backend_node.py                          # Python/FastAPI専門 → backend_files: dict[str,str]
         ├── frontend_node.py                         # フロントエンド専門 → frontend_files: dict[str,str]
         ├── database_node.py                         # DB設計・実装専門 → database_files: dict[str,str]

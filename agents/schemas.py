@@ -1,17 +1,14 @@
 """
-構造化出力スキーマ — 各エージェントが LLM から受け取る型付き結果。
+関数スキーマ — 各エージェントが function calling で「submit 関数」として呼び出す型。
 
 設計意図:
-  以前は @tool デコレータを付けたメソッド (本体は ...) でツールを定義していたが、
-  LangChain の @tool はインスタンスメソッド (self 付き) を正しく扱えず、
-  さらに本体が空のため実際には何も生成できなかった。
+  本システムは LangChain の `bind_tools` による明示的なファンクションコーリングで動く。
+  各ノードは自分の結果スキーマ (WorkPlan / ReviewResult 等) を LLM にツールとして
+  バインドし、LLM がそれを呼び出すことで型付きの結果を受け取る (Agent_Node._run_agent)。
 
-  本システムのワーカーは「コードを生成する」のが仕事であり、
-  生成処理は Python ではなく LLM が行う。したがって正しいプリミティブは
-  `llm.with_structured_output(Schema)` による構造化出力である。
-
-  各ノードはここで定義したスキーマを使って LLM から型付きの結果を受け取り、
-  AgentState の専用フィールド (*_files 等) に格納する。
+  ワーカーはさらに write_file / read_file / list_files の実行可能ツールを使って
+  成果物を組み立て、最後に WorkerSubmission を呼んで完了を通知する。
+  生成されたファイルはワークスペース (agents/tools/workspace.py) に蓄積される。
 """
 
 from __future__ import annotations
@@ -40,18 +37,20 @@ class WorkPlan(BaseModel):
     )
 
 
-class FileSet(BaseModel):
-    """ワーカーが生成する多ファイル成果物。"""
+class WorkerSubmission(BaseModel):
+    """
+    ワーカーが実装完了を通知する submit 関数。
 
-    files: dict[str, str] = Field(
-        description=(
-            "ファイルパス → ファイル全文 のマップ。"
-            "コピー&ペーストで即動作する完全なコードを格納する。"
-        )
-    )
+    成果物ファイルは write_file ツールでワークスペースへ書き込み済みのため、
+    ここでは要約・補足のみを運ぶ (ファイル本文は含めない)。
+    """
+
     notes: str = Field(
         default="",
-        description="実装上の補足・前提・既知の制約 (任意)。",
+        description=(
+            "実装内容の要約・前提・既知の制約。"
+            "全ファイルを write_file で書き終えてからこの関数を呼ぶこと。"
+        ),
     )
 
 
